@@ -4,48 +4,49 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const IBKR_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService";
-const WAIT_MS = 7000; // 5–10 sec between SendRequest and GetStatement
+const WAIT_MS = 7000;
 
-// IBKR symbol → yfinance ticker mapping (European stocks need suffixes)
+// IBKR symbol → yfinance ticker (exact mapping from user)
 const TICKER_MAP: Record<string, string> = {
   EQNR: "EQNR.OL",
   AKRBP: "AKRBP.OL",
-  "NOVO B": "NOVO-B.CO",
-  "NOVO-B": "NOVO-B.CO",
-  NOVOB: "NOVO-B.CO",
-  UPM: "UPM.HE",
-  "A8X": "A8X.F",
-  INPP: "INPP.L",
-  SEQI: "SEQI.L",
-  HICL: "HICL.L",
-  TRIG: "TRIG.L",
-  LGEN: "LGEN.L",
-  SUPR: "SUPR.L",
+  NOVOBc: "NOVO-B.CO",
+  A8X: "A8X.F",
   IS04: "IS04.L",
+  UPM: "UPM.HE",
+  HICL: "HICL.L",
+  INPP: "INPP.L",
+  LGEN: "LGEN.L",
+  SEQI: "SEQI.L",
+  SUPR: "SUPR.L",
+  TRIG: "TRIG.L",
+  ADBE: "ADBE",
+  AGNC: "AGNC",
+  ARCC: "ARCC",
+  FIG: "FIG",
+  IFN: "IFN",
+  IIPR: "IIPR",
+  LEG: "LEG",
+  MSFT: "MSFT",
+  O: "O",
+  PYPL: "PYPL",
+  SEVN: "SEVN",
+  TIRXF: "TIRXF",
+  TLT: "TLT",
+  VICI: "VICI",
+  VZ: "VZ",
+  OXY: "OXY",
 };
-
-function mapIbkrToYf(symbol: string): string | null {
-  const normalized = symbol.trim().toUpperCase();
-  const noSpace = normalized.replace(/\s+/g, "");
-  const withDash = normalized.replace(/\s+/g, "-");
-  return (
-    TICKER_MAP[normalized] ??
-    TICKER_MAP[symbol.trim()] ??
-    TICKER_MAP[noSpace] ??
-    TICKER_MAP[withDash] ??
-    null
-  );
-}
 
 type IbkrPosition = {
   symbol: string;
   currency: string;
   quantity: number;
   avgPrice: number;
-  marketPrice?: number;
-  marketValue?: number;
-  unrealizedPnl?: number;
+  marketPrice: number;
 };
+
+type IbkrFxRates = Record<string, number>;
 
 function extractNumber(val: unknown): number {
   if (val == null) return 0;
@@ -62,24 +63,27 @@ function extractText(val: unknown): string {
   return String(val).trim();
 }
 
-function getKeyIgnoreCase(obj: Record<string, unknown>, ...keys: string[]): unknown {
-  const lower = Object.fromEntries(Object.entries(obj).map(([k, v]) => [k.toLowerCase(), v]));
-  for (const key of keys) {
-    const val = lower[key.toLowerCase()];
-    if (val !== undefined) return val;
+function resolveYfTicker(ibkrSymbol: string): string {
+  const mapped = TICKER_MAP[ibkrSymbol.trim()];
+  if (mapped) return mapped;
+  // Bond: "OXY 4 5/8 06/15/45" → OXY
+  if (ibkrSymbol.includes(" ")) {
+    const first = ibkrSymbol.trim().split(/\s+/)[0];
+    return TICKER_MAP[first] ?? first;
   }
-  return undefined;
+  return ibkrSymbol.trim().toUpperCase();
 }
 
-async function parseFlexXml(xml: string): Promise<IbkrPosition[]> {
+async function parseFlexXml(xml: string): Promise<{ positions: IbkrPosition[]; fxRates: IbkrFxRates }> {
   const parsed = await parseStringPromise(xml, {
     explicitArray: false,
-    ignoreAttrs: true,
+    ignoreAttrs: false,
     mergeAttrs: true,
-    tagNameProcessors: [(name) => name.toLowerCase()],
+    tagNameProcessors: [(n) => n.toLowerCase()],
   });
 
   const positions: IbkrPosition[] = [];
+  const fxRates: IbkrFxRates = { EUR: 1 };
 
   const walk = (obj: unknown): void => {
     if (!obj || typeof obj !== "object") return;
@@ -93,8 +97,20 @@ async function parseFlexXml(xml: string): Promise<IbkrPosition[]> {
       }
       return;
     }
+    if (o.conversionrate) {
+      const items = Array.isArray(o.conversionrate) ? o.conversionrate : [o.conversionrate];
+      for (const item of items) {
+        const rate = parseConversionRate(item);
+        if (rate) fxRates[rate.from] = rate.rate;
+      }
+      return;
+    }
     if (o.openpositions) {
       walk(o.openpositions);
+      return;
+    }
+    if (o.conversionrates) {
+      walk(o.conversionrates);
       return;
     }
     if (o.flexstatement) {
@@ -118,44 +134,43 @@ async function parseFlexXml(xml: string): Promise<IbkrPosition[]> {
   function parsePosition(item: unknown): IbkrPosition | null {
     if (!item || typeof item !== "object") return null;
     const p = item as Record<string, unknown>;
-    const assetCategory = extractText(getKeyIgnoreCase(p, "assetcategory", "assetCategory")).toLowerCase();
-    if (assetCategory && !["stock", "stk", "equity", ""].includes(assetCategory)) return null;
+    const assetCategory = extractText(p.assetcategory ?? p.assetCategory).toLowerCase();
+    if (assetCategory && !["stk", "bond"].includes(assetCategory)) return null;
 
-    const symbol = extractText(getKeyIgnoreCase(p, "symbol"));
+    const symbol = extractText(p.symbol);
     if (!symbol) return null;
 
-    const qty = extractNumber(getKeyIgnoreCase(p, "quantity", "position"));
+    const qty = extractNumber(p.position);
     if (qty <= 0) return null;
 
-    const currency = extractText(getKeyIgnoreCase(p, "currency")) || "USD";
+    const currency = extractText(p.currency) || "USD";
     const avgPrice =
-      extractNumber(getKeyIgnoreCase(p, "costbasisprice", "costBasisPrice", "costbasis")) ||
-      extractNumber(getKeyIgnoreCase(p, "openprice", "openPrice", "averagecost", "averageCost", "avgprice")) ||
+      extractNumber(p.costbasisprice ?? p.costBasisPrice) ||
+      extractNumber(p.openprice ?? p.openPrice) ||
       0;
-    const marketPrice =
-      extractNumber(getKeyIgnoreCase(p, "markprice", "markPrice")) || avgPrice;
-    const marketValue = extractNumber(getKeyIgnoreCase(p, "positionvalue", "positionValue", "marketvalue"));
-    const unrealizedPnl = extractNumber(getKeyIgnoreCase(p, "fifopnlunrealized", "fifoPnlUnrealized", "unrealizedpnl"));
+    const marketPrice = extractNumber(p.markprice ?? p.markPrice) || avgPrice;
 
     return {
       symbol,
       currency,
       quantity: Math.abs(qty),
       avgPrice: avgPrice || marketPrice,
-      marketPrice: marketPrice || undefined,
-      marketValue: marketValue || undefined,
-      unrealizedPnl: unrealizedPnl || undefined,
+      marketPrice: marketPrice || avgPrice,
     };
   }
 
-  walk(parsed);
-  return positions;
-}
+  function parseConversionRate(item: unknown): { from: string; rate: number } | null {
+    if (!item || typeof item !== "object") return null;
+    const r = item as Record<string, unknown>;
+    const from = extractText(r.fromcurrency ?? r.fromCurrency);
+    const to = extractText(r.tocurrency ?? r.toCurrency);
+    const rate = extractNumber(r.rate);
+    if (from && to?.toUpperCase() === "EUR" && rate > 0) return { from, rate };
+    return null;
+  }
 
-function resolveYfTicker(ibkrSymbol: string): string {
-  const mapped = mapIbkrToYf(ibkrSymbol);
-  if (mapped) return mapped;
-  return ibkrSymbol.trim().toUpperCase().replace(/\s+/g, "");
+  walk(parsed);
+  return { positions, fxRates };
 }
 
 export async function GET() {
@@ -170,7 +185,6 @@ export async function GET() {
   }
 
   try {
-    // Step 1: SendRequest
     const sendUrl = `${IBKR_BASE}/SendRequest?t=${encodeURIComponent(token)}&q=${encodeURIComponent(queryId)}&v=3`;
     const sendRes = await fetch(sendUrl, {
       headers: { "User-Agent": "PortfolioDashboard/1.0" },
@@ -179,7 +193,7 @@ export async function GET() {
 
     const sendParsed = await parseStringPromise(sendXml, {
       explicitArray: false,
-      ignoreAttrs: true,
+      mergeAttrs: true,
       tagNameProcessors: [(n) => n.toLowerCase()],
     });
     const resp = (sendParsed as Record<string, unknown>).flexstatementresponse as Record<string, unknown> | undefined;
@@ -187,19 +201,16 @@ export async function GET() {
     const refCode = extractText(resp?.referencecode);
 
     if (status.toLowerCase() !== "success" || !refCode) {
-      const errCode = extractText(resp?.errorcode);
       const errMsg = extractText(resp?.errormessage);
-      console.error("[ibkr-sync] SendRequest failed:", status, errCode, errMsg);
+      console.error("[ibkr-sync] SendRequest failed:", status, errMsg);
       return NextResponse.json(
         { error: errMsg || status || "SendRequest failed", synced: false },
         { status: 502 }
       );
     }
 
-    // Step 2: Wait 5–10 seconds
     await new Promise((r) => setTimeout(r, WAIT_MS));
 
-    // Step 3: GetStatement
     const getUrl = `${IBKR_BASE}/GetStatement?t=${encodeURIComponent(token)}&q=${encodeURIComponent(refCode)}&v=3`;
     const getRes = await fetch(getUrl, {
       headers: { "User-Agent": "PortfolioDashboard/1.0" },
@@ -214,20 +225,13 @@ export async function GET() {
       );
     }
 
-    const ibkrPositions = await parseFlexXml(statementXml);
-    if (ibkrPositions.length === 0) {
-      return NextResponse.json({
-        synced: true,
-        positions: [],
-        changes: [],
-        message: "No positions found in Flex statement",
-      });
-    }
+    const { positions: ibkrPositions, fxRates: ibkrFxRates } = await parseFlexXml(statementXml);
 
     const dataPath = path.join(process.cwd(), "portfolio_data.json");
-    let existing: { positions: Record<string, { avg_price: number; shares: number; currency: string; tees?: string; target?: number; stop_loss?: number }>; fx_rates?: Record<string, number> } = {
-      positions: {},
-    };
+    let existing: {
+      positions: Record<string, { avg_price: number; shares: number; currency: string; tees?: string; target?: number; stop_loss?: number; source?: string }>;
+      fx_rates?: Record<string, number>;
+    } = { positions: {} };
     try {
       const raw = await fs.readFile(dataPath, "utf-8");
       existing = JSON.parse(raw) as typeof existing;
@@ -235,19 +239,17 @@ export async function GET() {
       existing = { positions: {} };
     }
 
+    const ibkrYfTickers = new Set(ibkrPositions.map((p) => resolveYfTicker(p.symbol)));
+
     const changes: string[] = [];
-    const updatedFromIbkr: Record<string, { avg_price: number; shares: number; currency: string; tees?: string; target?: number; stop_loss?: number }> = {};
-    const gbxTickers = ["INPP.L", "SEQI.L", "HICL.L", "SUPR.L", "TRIG.L", "LGEN.L", "IS04.L"];
+    const updatedFromIbkr: Record<string, { avg_price: number; shares: number; currency: string; tees?: string; target?: number; stop_loss?: number; source: string }> = {};
 
     for (const p of ibkrPositions) {
       const yfTicker = resolveYfTicker(p.symbol);
       const prev = existing.positions[yfTicker];
 
       const avgPrice = p.avgPrice;
-      const currency =
-        p.currency === "GBP" && gbxTickers.includes(yfTicker)
-          ? "GBX"
-          : p.currency;
+      const currency = p.currency;
 
       const entry = {
         avg_price: avgPrice,
@@ -256,6 +258,7 @@ export async function GET() {
         tees: prev?.tees ?? "",
         target: prev?.target ?? 0,
         stop_loss: prev?.stop_loss ?? 0,
+        source: "ibkr" as const,
       };
 
       if (prev) {
@@ -268,21 +271,33 @@ export async function GET() {
       updatedFromIbkr[yfTicker] = entry;
     }
 
-    const mergedPositions = { ...existing.positions };
+    const mergedPositions: Record<string, { avg_price: number; shares: number; currency: string; tees?: string; target?: number; stop_loss?: number; source?: string }> = {};
     for (const [tk, pos] of Object.entries(updatedFromIbkr)) {
       mergedPositions[tk] = pos;
     }
+    for (const [tk, pos] of Object.entries(existing.positions)) {
+      if (!ibkrYfTickers.has(tk)) {
+        if (pos.source === "manual") {
+          mergedPositions[tk] = pos;
+        } else {
+          changes.push(`Eemaldatud: ${tk} (pole enam IBKR-is)`);
+        }
+      }
+    }
 
-    const output = {
-      positions: mergedPositions,
-      fx_rates: existing.fx_rates ?? {
-        NOK: 0.087,
-        DKK: 0.134,
-        GBP: 1.17,
-        USD: 0.92,
-        EUR: 1,
-      },
+    const defaultFx = {
+      NOK: 0.090839,
+      DKK: 0.13382,
+      GBP: 1.1577,
+      USD: 0.87325,
+      EUR: 1,
     };
+    const fx_rates = {
+      ...defaultFx,
+      ...(Object.keys(ibkrFxRates).length > 0 ? ibkrFxRates : existing.fx_rates ?? {}),
+    };
+
+    const output = { positions: mergedPositions, fx_rates };
 
     await fs.writeFile(dataPath, JSON.stringify(output, null, 2), "utf-8");
 
@@ -290,6 +305,7 @@ export async function GET() {
       synced: true,
       positions: Object.keys(updatedFromIbkr),
       changes,
+      fxRates: fx_rates,
       message: `Synced ${Object.keys(updatedFromIbkr).length} positions`,
     });
   } catch (err) {

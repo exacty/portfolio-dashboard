@@ -12,6 +12,7 @@ type PortfolioData = {
       tees?: string;
       target?: number;
       stop_loss?: number;
+      source?: "ibkr" | "manual";
     }
   >;
   fx_rates?: Record<string, number>;
@@ -65,6 +66,7 @@ export async function POST(req: Request) {
         target: body.position.target ?? 0,
         stop_loss: body.position.stop_loss ?? 0,
         tees: body.position.tees ?? "",
+        source: "manual",
       };
       await fs.writeFile(filePath, JSON.stringify(json, null, 2), "utf-8");
       return NextResponse.json({ ok: true, ticker: body.ticker });

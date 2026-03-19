@@ -63,7 +63,7 @@ SECTOR_ETFS: List[str] = [
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_DIR = os.path.join(ROOT_DIR, "scripts", ".cache")
-CACHE_PATH = os.path.join(CACHE_DIR, "portfolio_engine_cache.json")
+CACHE_PATH = os.path.join(CACHE_DIR, "portfolio_cache.json")
 
 
 def _safe_float(x, default=0.0) -> float:
@@ -98,7 +98,7 @@ def _mkt_from_ticker(tk: str) -> str:
 
 def _cur_from_ticker(tk: str, portfolio_positions: Dict[str, Any]) -> str:
     if tk in GBX_PENNY_TICKERS:
-        return "GBX"
+        return portfolio_positions.get(tk, {}).get("currency", "GBX")
     # Use explicit known codes for the mockup look and feel
     if tk.endswith(".OL"):
         return "NOK"
@@ -118,7 +118,8 @@ def _ticker_name(tk: str, info: Dict[str, Any]) -> str:
 
 
 def _pull_fx_rates() -> Dict[str, float]:
-    # yfinance: USDEUR=X usually means EUR per 1 USD (price in EUR)
+    # yfinance: XXXEUR=X = EUR per 1 XXX (e.g. 1 USD = 0.92 EUR)
+    # If API returns inverse (EUR per XXX > 1), fix it
     fx_tickers = {
         "USD": "USDEUR=X",
         "GBP": "GBPEUR=X",
@@ -131,7 +132,11 @@ def _pull_fx_rates() -> Dict[str, float]:
     for cur, fx_tk in fx_tickers.items():
         try:
             fx = yf.download(fx_tk, period="2d", interval="1d", progress=False)
+            if fx.empty or "Close" not in fx.columns:
+                raise ValueError("Empty FX data")
             close = fx["Close"].dropna()
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
             val = _safe_scalar(close, -1)
             out[cur] = val
         except Exception:
@@ -140,6 +145,13 @@ def _pull_fx_rates() -> Dict[str, float]:
     # Ensure expected keys exist
     for k in ["NOK", "DKK", "GBP", "USD", "EUR"]:
         out.setdefault(k, 1.0 if k == "EUR" else 0.0)
+
+    # Defensive: 1 NOK/USD/DKK < 1 EUR. If rate > 1, API likely returned inverse.
+    for cur in ["NOK", "DKK", "USD"]:
+        r = out.get(cur, 0)
+        if r and r > 1.0:
+            out[cur] = 1.0 / r
+
     return out
 
 
@@ -218,6 +230,38 @@ def _make_signals(ret_pct: float, rsi: float, div_yield_pct: float) -> Tuple[Lis
         t3 = "i" if rsi < 50 else "n"
 
     return [s1, s2, s3], [t1, t2, t3]
+
+
+def _compute_div_yield(tk: str, price: float, info: Dict[str, Any]) -> float:
+    """Compute dividend yield from info or Ticker.dividends. Returns percent (e.g. 5.4)."""
+    if not price or price <= 0:
+        return 0.0
+    result = 0.0
+    raw = _safe_float(info.get("dividendYield"), 0.0)
+    if raw > 0:
+        result = raw * 100.0 if raw <= 1.0 else raw
+    else:
+        raw = _safe_float(info.get("trailingAnnualDividendYield"), 0.0)
+        if raw > 0:
+            result = raw * 100.0 if raw <= 1.0 else raw
+        elif (div_rate := _safe_float(info.get("dividendRate"), 0.0)) > 0:
+            result = (div_rate / price) * 100.0
+        else:
+            try:
+                divs = yf.Ticker(tk).dividends
+                if divs is not None and len(divs) > 0:
+                    cutoff = pd.Timestamp.utcnow() - pd.DateOffset(months=12)
+                    last_12m = divs[divs.index >= cutoff]
+                    total = float(last_12m.sum()) if len(last_12m) else 0.0
+                    if total > 0:
+                        result = (total / price) * 100.0
+            except Exception:
+                pass
+    if result > 30:
+        result = result / 100.0
+    if result > 25:
+        result = 0.0
+    return result
 
 
 def _format_pe(x: Any) -> str:
@@ -481,20 +525,23 @@ def _compute_position(
     cur = _cur_from_ticker(tk, portfolio_positions)
     mkt = _mkt_from_ticker(tk)
 
+    shares = float(portfolio_positions.get(tk, {}).get("shares", 0.0))
+    avg_price_raw = float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
+
+    # yfinance returns .L ticker prices in pence; portfolio_data from IBKR stores GBP in pounds
+    if cur == "GBP" and tk.endswith(".L") and len(close) >= 2:
+        price_raw = price_raw / 100.0
+
     # Div / valuations
     trailing_pe = info.get("trailingPE")
     forward_pe = info.get("forwardPE")
     pe = _format_pe(trailing_pe)
     fpe = _format_fpe(forward_pe)
 
-    # yfinance dividendYield: usually decimal (0.054 = 5.4%); sometimes already percent (5.4)
-    div_yield_raw = _safe_float(info.get("dividendYield"), 0.0)
-    div_yield_pct = div_yield_raw * 100.0 if div_yield_raw <= 1.0 else div_yield_raw
+    # Div yield: dividendYield, trailingAnnualDividendYield, dividendRate, or from dividends history
+    div_yield_pct = _compute_div_yield(tk, price_raw, info)
 
     eur_price = _to_eur_price(tk, price_raw, cur, fx_rates)
-
-    shares = float(portfolio_positions.get(tk, {}).get("shares", 0.0))
-    avg_price_raw = float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
     avg_eur = _to_eur_price(tk, avg_price_raw, cur, fx_rates)
     # For table UI, we report current P&L later as KPIs; keep position fields for now.
     score = _heuristic_score(ret_pct, rsi, div_yield_pct)
@@ -755,7 +802,7 @@ def build_portfolio_json() -> Dict[str, Any]:
 
     # Batch download: ALL tickers in ONE call per period (~10x faster)
     price_hist_1y = _download_history_batch(tickers_all + SECTOR_ETFS, period="1y")
-    price_hist_3mo = _download_history_batch(tickers_all + ["^GSPC"], period="3mo")
+    price_hist_3mo = _download_history_batch(tickers_all + ["^GSPC", "^TNX"], period="3mo")
     price_hist_pos = {tk: price_hist_1y.get(tk, pd.DataFrame()) for tk in tickers_all}
     corr_hist = {tk: price_hist_3mo.get(tk, pd.DataFrame()) for tk in tickers_all}
 
@@ -789,8 +836,8 @@ def build_portfolio_json() -> Dict[str, Any]:
 
     for p in positions:
         value_eur = p["eur_price"] * p["shares"]
-        p["eur"] = float(value_eur)
-        p["pct"] = float(value_eur / total_eur * 100.0)
+        p["eur"] = round(float(value_eur), 0)
+        p["pct"] = round(float(value_eur / total_eur * 100.0), 1)
 
     tickers_ok, corr_mat = _compute_corr(tickers_all, corr_hist)
 
@@ -868,6 +915,11 @@ def build_portfolio_json() -> Dict[str, Any]:
     # KPIs
     cost_basis_eur = sum(p["avg_eur"] * p["shares"] for p in positions)
     unrealized_pnl = total_eur - cost_basis_eur
+    if os.environ.get("PORTFOLIO_DEBUG"):
+        for p in positions:
+            eur_val = p["eur_price"] * p["shares"]
+            print(f"[debug] {p['tk']}: shares={p['shares']} price={p['eur_price']:.2f} eur_val={eur_val:.0f}")
+        print(f"[debug] total_eur={total_eur:.0f} cost_basis={cost_basis_eur:.0f} unrealized_pnl={unrealized_pnl:.0f}")
     unrealized_pnl_pct = (unrealized_pnl / cost_basis_eur * 100.0) if cost_basis_eur else 0.0
     day_chg_eur = sum(p["eur_price"] * p["shares"] * (p["chg"] / 100.0) for p in positions)
     day_chg_pct = (day_chg_eur / total_eur * 100.0) if total_eur else 0.0
@@ -876,10 +928,16 @@ def build_portfolio_json() -> Dict[str, Any]:
     div_yield = (div_yearly_eur / total_eur * 100.0) if total_eur else 0.0
     div_monthly_eur = div_yearly_eur / 12.0
 
-    # Beta & Sharpe — use batch 3mo data
+    # Beta & Sharpe — use batch 3mo data, risk-free from 10Y yield (^TNX)
     spy_hist = price_hist_3mo.get("^GSPC", pd.DataFrame())
+    tnx_hist = price_hist_3mo.get("^TNX", pd.DataFrame())
     beta_val = 0.74
-    sharpe_val = 0.42
+    sharpe_val = 0.0
+    risk_free_pct = 0.0
+    if not tnx_hist.empty and "Close" in tnx_hist.columns:
+        tnx_close = tnx_hist["Close"].dropna()
+        if len(tnx_close) >= 1:
+            risk_free_pct = _safe_scalar(tnx_close, -1) / 100.0  # ^TNX is in percent (e.g. 4.5)
     if not spy_hist.empty and "Close" in spy_hist.columns:
         spy_close = spy_hist["Close"].dropna()
         if len(spy_close) >= 20:
@@ -902,7 +960,10 @@ def build_portfolio_json() -> Dict[str, Any]:
                 cov = port_rets.cov(spy_rets.reindex(port_rets.index).fillna(0))
                 var_mkt = spy_rets.var()
                 beta_val = float(cov / var_mkt) if var_mkt and var_mkt > 0 else 0.74
-                sharpe_val = float(port_rets.mean() / port_rets.std() * (252 ** 0.5)) if port_rets.std() > 0 else 0.42
+                ann_return = float(port_rets.mean() * 252)
+                ann_std = float(port_rets.std() * (252 ** 0.5))
+                if ann_std > 0:
+                    sharpe_val = (ann_return - risk_free_pct) / ann_std
 
     max_pct = max((p["pct"] for p in positions), default=0.0)
     concentration = max_pct
@@ -921,7 +982,7 @@ def build_portfolio_json() -> Dict[str, Any]:
     kpis = {
         "portfolioTotal": round(total_eur, 0),
         "dayChgEur": round(day_chg_eur, 0),
-        "dayChgPct": round(day_chg_pct, 2),
+        "dayChgPct": round(day_chg_pct, 1),
         "unrealizedPnl": round(unrealized_pnl, 0),
         "unrealizedPnlPct": round(unrealized_pnl_pct, 1),
         "costBasisEur": round(cost_basis_eur, 0),

@@ -1,7 +1,7 @@
 {
   "positions": {
     "EQNR.OL": {
-      "avg_price": 250.33,
+      "avg_price": 250.3251,
       "shares": 1000,
       "currency": "NOK",
       "tees": "Tugev energiaettevõte, hea dividend",
@@ -9,7 +9,7 @@
       "stop_loss": 200
     },
     "AKRBP.OL": {
-      "avg_price": 248.67,
+      "avg_price": 248.66477025,
       "shares": 1200,
       "currency": "NOK",
       "tees": "Aker BP - Norra nafta, kõrge dividend.",
@@ -17,7 +17,7 @@
       "stop_loss": 0
     },
     "VZ": {
-      "avg_price": 41.783,
+      "avg_price": 41.782887385,
       "shares": 2600,
       "currency": "USD",
       "tees": "Verizon - stabiilne telecom dividend",
@@ -25,7 +25,7 @@
       "stop_loss": 0
     },
     "O": {
-      "avg_price": 55.282,
+      "avg_price": 55.281227768,
       "shares": 2100,
       "currency": "USD",
       "tees": "Realty Income - igakuine dividend REIT",
@@ -33,7 +33,7 @@
       "stop_loss": 0
     },
     "UPM.HE": {
-      "avg_price": 22.644,
+      "avg_price": 22.643316,
       "shares": 3000,
       "currency": "EUR",
       "tees": "UPM-Kymmene metsatööstus",
@@ -41,7 +41,7 @@
       "stop_loss": 0
     },
     "AGNC": {
-      "avg_price": 9.536,
+      "avg_price": 9.535952137,
       "shares": 10785,
       "currency": "USD",
       "tees": "Mortgage REIT, kõrge dividend",
@@ -49,7 +49,7 @@
       "stop_loss": 0
     },
     "INPP.L": {
-      "avg_price": 127.07,
+      "avg_price": 1.270672799,
       "shares": 79000,
       "currency": "GBP",
       "tees": "UK infrastruktuur, stabiilne dividend",
@@ -57,7 +57,7 @@
       "stop_loss": 0
     },
     "SEQI.L": {
-      "avg_price": 78.25,
+      "avg_price": 0.782402719,
       "shares": 128000,
       "currency": "GBP",
       "tees": "Sequoia infra dividend",
@@ -65,7 +65,7 @@
       "stop_loss": 0
     },
     "HICL.L": {
-      "avg_price": 118.66,
+      "avg_price": 1.186505957,
       "shares": 94000,
       "currency": "GBP",
       "tees": "HICL UK infrastruktuur",
@@ -73,7 +73,7 @@
       "stop_loss": 0
     },
     "A8X.F": {
-      "avg_price": 12.321,
+      "avg_price": 12.320552907,
       "shares": 3901,
       "currency": "EUR",
       "tees": "Fiskars tarbekaup",
@@ -81,7 +81,7 @@
       "stop_loss": 0
     },
     "SUPR.L": {
-      "avg_price": 84.22,
+      "avg_price": 0.842188158,
       "shares": 180000,
       "currency": "GBP",
       "tees": "UK toidupoe REIT",
@@ -90,14 +90,14 @@
     },
     "OXY": {
       "avg_price": 79.944,
-      "shares": 25,
+      "shares": 2000,
       "currency": "USD",
       "tees": "Buffett positsioon, nafta",
       "target": 0,
       "stop_loss": 0
     },
     "NOVO-B.CO": {
-      "avg_price": 249.395,
+      "avg_price": 249.394635,
       "shares": 2500,
       "currency": "DKK",
       "tees": "Novo Nordisk Ozempic kasv",
@@ -105,7 +105,7 @@
       "stop_loss": 0
     },
     "VICI": {
-      "avg_price": 29.202,
+      "avg_price": 29.20117,
       "shares": 4000,
       "currency": "USD",
       "tees": "Casino REIT",
@@ -113,7 +113,7 @@
       "stop_loss": 0
     },
     "TRIG.L": {
-      "avg_price": 69.41,
+      "avg_price": 0.6940385,
       "shares": 120000,
       "currency": "GBP",
       "tees": "Taastuvenergia UK",
@@ -121,7 +121,7 @@
       "stop_loss": 0
     },
     "LGEN.L": {
-      "avg_price": 259.46,
+      "avg_price": 2.594579551,
       "shares": 49000,
       "currency": "GBP",
       "tees": "UK kindlustus, kõrge dividend",
@@ -129,7 +129,7 @@
       "stop_loss": 0
     },
     "MSFT": {
-      "avg_price": 419.753,
+      "avg_price": 419.752483333,
       "shares": 300,
       "currency": "USD",
       "tees": "Azure + AI kasv",
@@ -137,7 +137,7 @@
       "stop_loss": 0
     },
     "TLT": {
-      "avg_price": 98.362,
+      "avg_price": 98.361666667,
       "shares": 600,
       "currency": "USD",
       "tees": "Intresside languse mäng",
@@ -145,15 +145,15 @@
       "stop_loss": 0
     },
     "IS04.L": {
-      "avg_price": 3.18522,
+      "avg_price": 3.18521181,
       "shares": 25000,
-      "currency": "GBP",
+      "currency": "EUR",
       "tees": "Pikaajalised USA riigivõlakirjad",
       "target": 0,
       "stop_loss": 0
     },
     "IFN": {
-      "avg_price": 13.735,
+      "avg_price": 13.734562486,
       "shares": 4377,
       "currency": "USD",
       "tees": "India kasvuturg",
@@ -161,7 +161,7 @@
       "stop_loss": 0
     },
     "ARCC": {
-      "avg_price": 21.426,
+      "avg_price": 21.425022,
       "shares": 2400,
       "currency": "USD",
       "tees": "Suurim BDC, kõrge dividend",
@@ -169,7 +169,7 @@
       "stop_loss": 0
     },
     "IIPR": {
-      "avg_price": 64.327,
+      "avg_price": 64.326332998,
       "shares": 1566,
       "currency": "USD",
       "tees": "Cannabis REIT",
@@ -177,7 +177,7 @@
       "stop_loss": 0
     },
     "FIG": {
-      "avg_price": 34.197,
+      "avg_price": 34.1968699,
       "shares": 2000,
       "currency": "USD",
       "tees": "Figma design tarkvara",
@@ -185,7 +185,7 @@
       "stop_loss": 0
     },
     "ADBE": {
-      "avg_price": 363.661,
+      "avg_price": 363.660427,
       "shares": 150,
       "currency": "USD",
       "tees": "Adobe creative monopol",
@@ -193,7 +193,7 @@
       "stop_loss": 0
     },
     "PYPL": {
-      "avg_price": 73.35,
+      "avg_price": 73.349725687,
       "shares": 1600,
       "currency": "USD",
       "tees": "Fintech turnaround",
@@ -201,7 +201,7 @@
       "stop_loss": 0
     },
     "SEVN": {
-      "avg_price": 13.833,
+      "avg_price": 13.832866544,
       "shares": 8130,
       "currency": "USD",
       "tees": "Kõrge dividend mREIT",
@@ -209,7 +209,7 @@
       "stop_loss": 0
     },
     "LEG": {
-      "avg_price": 18.726,
+      "avg_price": 18.725858537,
       "shares": 4100,
       "currency": "USD",
       "tees": "Restruktureerimine",
@@ -217,7 +217,7 @@
       "stop_loss": 0
     },
     "TIRXF": {
-      "avg_price": 0.11226,
+      "avg_price": 0.112259486,
       "shares": 110000,
       "currency": "USD",
       "tees": "Spekulatiivne",
@@ -226,10 +226,10 @@
     }
   },
   "fx_rates": {
-    "NOK": 0.087,
-    "DKK": 0.134,
-    "GBP": 1.17,
-    "USD": 0.92,
+    "NOK": 0.090839,
+    "DKK": 0.13382,
+    "GBP": 1.1577,
+    "USD": 0.87325,
     "EUR": 1
   }
 }

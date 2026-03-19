@@ -790,12 +790,13 @@ function scoreColor(score: number) {
 function ScoreRing({ score }: { score: number }) {
   const r = 16;
   const c = Math.PI * 2 * r;
-  const offset = c - (score / 100) * c;
+  const filled = Math.min(100, Math.max(0, score)) / 100;
+  const offset = c * (1 - filled);
   const col = scoreColor(score);
 
   return (
     <div className="score">
-      <svg width="36" height="36" viewBox="0 0 36 36" aria-hidden>
+      <svg width="36" height="36" viewBox="0 0 36 36" aria-hidden style={{ transform: "rotate(-90deg)" }}>
         <circle cx="18" cy="18" r={r} fill="none" stroke="var(--bg)" strokeWidth="3" />
         <circle
           cx="18"
@@ -804,7 +805,7 @@ function ScoreRing({ score }: { score: number }) {
           fill="none"
           stroke={col}
           strokeWidth="3"
-          strokeDasharray={c}
+          strokeDasharray={`${c} ${c}`}
           strokeDashoffset={offset}
           strokeLinecap="round"
         />
@@ -877,6 +878,8 @@ export default function Home() {
     spy: Array<{ date: string; value: number }>;
   }>({ portfolio: [], spy: [] });
 
+  const [headerMeta, setHeaderMeta] = useState("");
+
   const monitorAlerts = useMemo<AlertItem[]>(() => {
     const alerts = lastScan.alerts ?? { urgent: [], warning: [], info: [] };
 
@@ -911,6 +914,19 @@ export default function Home() {
       ...toItems(alerts.info ?? [], "success", "primary", "Vaata"),
     ];
   }, [lastScan]);
+
+  useEffect(() => {
+    const parts: string[] = [];
+    if (portfolioData?.generatedAt) {
+      const mins = Math.floor((Date.now() - new Date(portfolioData.generatedAt).getTime()) / 60000);
+      parts.push("Andmed: " + (mins < 1 ? "just nüüd" : `${mins} min tagasi`));
+    }
+    parts.push(
+      "Viimati skaneeritud: " +
+        (lastScan.generatedAt ? new Date(lastScan.generatedAt).toLocaleTimeString("et-EE", { hour: "2-digit", minute: "2-digit" }) : "—")
+    );
+    setHeaderMeta(parts.join(" · "));
+  }, [portfolioData?.generatedAt, lastScan.generatedAt]);
 
   const alertsToRender = monitorAlerts.length ? monitorAlerts : aiAlerts;
   const lastScanUrgentCount = lastScan.alerts?.urgent?.length ?? 0;
@@ -1246,8 +1262,7 @@ export default function Home() {
             <div className="meta">
               18.03.2026 18:42 CET · Järgmine skan: 19:00
               <br />
-              Viimati skaneeritud:{" "}
-              {lastScan.generatedAt ? new Date(lastScan.generatedAt).toLocaleTimeString("et-EE", { hour: "2-digit", minute: "2-digit" }) : "—"}
+              {headerMeta || "Laen..."}
             </div>
             {portfolioError ? (
               <div style={{ fontSize: "10px", color: "var(--amber)", fontFamily: "var(--font-mono)" }}>{portfolioError}</div>
@@ -1335,7 +1350,7 @@ export default function Home() {
               {portfolioLoading && !portfolioData.kpis ? (
                 <span className="skel skel-num" style={{ display: "inline-block", width: 100 }} />
               ) : (
-                `€${(portfolioData.kpis?.portfolioTotal ?? 0).toLocaleString("de-DE")}`
+                `€${(portfolioData.kpis?.portfolioTotal ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}`
               )}
             </div>
             <div className="sub">
@@ -1344,11 +1359,11 @@ export default function Home() {
               ) : (
                 <>
                   <span className={((portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "pos" : "neg")}>
-                    {(portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.dayChgEur ?? 0).toLocaleString("de-DE")}
+                    {(portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.dayChgEur ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}
                   </span>
                   {" · "}
                   {((portfolioData.kpis?.dayChgPct ?? 0) >= 0 ? "+" : "")}
-                  {(portfolioData.kpis?.dayChgPct ?? 0).toFixed(2)}% täna
+                  {(portfolioData.kpis?.dayChgPct ?? 0).toFixed(1)}% täna
                 </>
               )}
             </div>
@@ -1360,7 +1375,7 @@ export default function Home() {
                 <span className="skel skel-num" style={{ display: "inline-block", width: 80 }} />
               ) : (
                 <>
-                  {(portfolioData.kpis?.unrealizedPnl ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.unrealizedPnl ?? 0).toLocaleString("de-DE")}
+                  {(portfolioData.kpis?.unrealizedPnl ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.unrealizedPnl ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}
                 </>
               )}
             </div>
@@ -1385,7 +1400,7 @@ export default function Home() {
               {portfolioLoading && !portfolioData.kpis ? (
                 <span className="skel skel-short" style={{ width: 90 }} />
               ) : (
-                `€${(portfolioData.kpis?.divYearlyEur ?? 0).toLocaleString("de-DE")}/a · €${(portfolioData.kpis?.divMonthlyEur ?? 0).toLocaleString("de-DE")}/kuu`
+                `€${(portfolioData.kpis?.divYearlyEur ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}/a · €${(portfolioData.kpis?.divMonthlyEur ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}/kuu`
               )}
             </div>
           </div>
@@ -1642,8 +1657,8 @@ export default function Home() {
                         </td>
 
                         <td className="cell-pos">
-                          <div className="eur-val">€{p.eur.toLocaleString("de-DE")}</div>
-                          <div className="pct-port">{p.pct}%</div>
+                          <div className="eur-val">€{p.eur.toLocaleString("de-DE", { maximumFractionDigits: 0 })}</div>
+                          <div className="pct-port">{typeof p.pct === "number" ? p.pct.toFixed(1) : p.pct}%</div>
                         </td>
 
                         <td className="cell-ret">
