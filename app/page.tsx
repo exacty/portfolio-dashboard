@@ -948,7 +948,10 @@ export default function Home() {
     setPortfolioLoading(true);
     setPortfolioError(null);
     try {
-      const res = await fetch("/api/portfolio", { method: "GET" });
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 120_000);
+      const res = await fetch("/api/portfolio", { method: "GET", signal: controller.signal });
+      window.clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as PortfolioResponse;
 
@@ -965,7 +968,8 @@ export default function Home() {
         macro: data.macro ?? prev.macro,
       }));
     } catch (e) {
-      setPortfolioError(`Portfolio laadimine ebaõnnestus: ${String(e)}`);
+      const msg = e instanceof Error && e.name === "AbortError" ? "Laadimine aegus (timeout 120s)" : `Portfolio laadimine ebaõnnestus: ${String(e)}`;
+      setPortfolioError(msg);
     } finally {
       setPortfolioLoading(false);
     }
@@ -1126,7 +1130,8 @@ export default function Home() {
       }
 
       const lc = await import("lightweight-charts");
-      const chart = lc.createChart(el, {
+      const { createChart, CandlestickSeries, LineSeries } = lc;
+      const chart = createChart(el, {
         width: el.clientWidth,
         height: 340,
         layout: { background: { color: "transparent" }, textColor: "var(--t1)" },
@@ -1134,24 +1139,17 @@ export default function Home() {
         timeScale: { timeVisible: true, secondsVisible: false },
       });
 
+      // lightweight-charts expects time in seconds (UTCTimestamp); API may return ms
+      const toTime = (t: number) => (t > 1e12 ? t / 1000 : t) as import("lightweight-charts").UTCTimestamp;
       const candles = tickerHistory.candles.map((c) => ({
-        time: c.time,
+        time: toTime(c.time),
         open: c.open,
         high: c.high,
         low: c.low,
         close: c.close,
       }));
 
-      const chartWithSeries = chart as unknown as {
-        addCandlestickSeries: (opts: unknown) => {
-          setData: (data: Array<{ time: number; open: number; high: number; low: number; close: number }>) => void;
-        };
-        addLineSeries: (opts: { color: string; lineWidth?: number }) => {
-          setData: (data: Array<{ time: number; value: number }>) => void;
-        };
-      };
-
-      const candleSeries = chartWithSeries.addCandlestickSeries({
+      const candleSeries = chart.addSeries(CandlestickSeries, {
         upColor: "var(--green)",
         downColor: "var(--red)",
         borderUpColor: "var(--green)",
@@ -1164,13 +1162,14 @@ export default function Home() {
       const close = candles.map((c) => c.close);
       const times = candles.map((c) => c.time);
 
-      const addLine = (color: string) => chartWithSeries.addLineSeries({ color, lineWidth: 2 });
+      const addLine = (color: string) => chart.addSeries(LineSeries, { color, lineWidth: 2 });
       const ma50 = addLine("var(--purple)");
       const ma200 = addLine("var(--t2)");
       const ema21 = addLine("var(--amber)");
 
-      const computeSMA = (window: number) => {
-        const out: Array<{ time: number; value: number }> = [];
+      type LinePoint = { time: (typeof times)[number]; value: number };
+      const computeSMA = (window: number): LinePoint[] => {
+        const out: LinePoint[] = [];
         for (let i = window - 1; i < close.length; i++) {
           const slice = close.slice(i - window + 1, i + 1);
           const avg = slice.reduce((a, b) => a + b, 0) / slice.length;
@@ -1179,9 +1178,9 @@ export default function Home() {
         return out;
       };
 
-      const computeEMA = (span: number) => {
+      const computeEMA = (span: number): LinePoint[] => {
         const k = 2 / (span + 1);
-        const out: Array<{ time: number; value: number }> = [];
+        const out: LinePoint[] = [];
         let ema = close[0];
         out.push({ time: times[0], value: ema });
         for (let i = 1; i < close.length; i++) {
@@ -1276,6 +1275,21 @@ export default function Home() {
           </div>
         </div>
 
+        {portfolioLoading ? (
+          <div
+            style={{
+              padding: "12px 24px",
+              background: "var(--bg3)",
+              borderBottom: "1px solid var(--border)",
+              color: "var(--t2)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 13,
+            }}
+          >
+            Laen andmeid...
+          </div>
+        ) : null}
+
         {/* KPI STRIP */}
         <div className="kpi-strip">
           <div className="kpi blue">
@@ -1284,7 +1298,7 @@ export default function Home() {
               {portfolioLoading && !portfolioData.kpis ? (
                 <span className="skel skel-num" style={{ display: "inline-block", width: 100 }} />
               ) : (
-                `€${(portfolioData.kpis?.portfolioTotal ?? 0).toLocaleString()}`
+                `€${(portfolioData.kpis?.portfolioTotal ?? 0).toLocaleString("de-DE")}`
               )}
             </div>
             <div className="sub">
@@ -1293,7 +1307,7 @@ export default function Home() {
               ) : (
                 <>
                   <span className={((portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "pos" : "neg")}>
-                    {(portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.dayChgEur ?? 0).toLocaleString()}
+                    {(portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.dayChgEur ?? 0).toLocaleString("de-DE")}
                   </span>
                   {" · "}
                   {((portfolioData.kpis?.dayChgPct ?? 0) >= 0 ? "+" : "")}
@@ -1309,7 +1323,7 @@ export default function Home() {
                 <span className="skel skel-num" style={{ display: "inline-block", width: 80 }} />
               ) : (
                 <>
-                  {(portfolioData.kpis?.unrealizedPnl ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.unrealizedPnl ?? 0).toLocaleString()}
+                  {(portfolioData.kpis?.unrealizedPnl ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.unrealizedPnl ?? 0).toLocaleString("de-DE")}
                 </>
               )}
             </div>
@@ -1334,7 +1348,7 @@ export default function Home() {
               {portfolioLoading && !portfolioData.kpis ? (
                 <span className="skel skel-short" style={{ width: 90 }} />
               ) : (
-                `€${(portfolioData.kpis?.divYearlyEur ?? 0).toLocaleString()}/a · €${(portfolioData.kpis?.divMonthlyEur ?? 0).toLocaleString()}/kuu`
+                `€${(portfolioData.kpis?.divYearlyEur ?? 0).toLocaleString("de-DE")}/a · €${(portfolioData.kpis?.divMonthlyEur ?? 0).toLocaleString("de-DE")}/kuu`
               )}
             </div>
           </div>
@@ -1591,7 +1605,7 @@ export default function Home() {
                         </td>
 
                         <td className="cell-pos">
-                          <div className="eur-val">€{p.eur.toLocaleString()}</div>
+                          <div className="eur-val">€{p.eur.toLocaleString("de-DE")}</div>
                           <div className="pct-port">{p.pct}%</div>
                         </td>
 
