@@ -6,12 +6,26 @@ import re
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
 from ta.momentum import RSIIndicator
+
+try:
+    from data_providers import DataAggregator
+    _AGGREGATOR: Optional[DataAggregator] = DataAggregator()
+except Exception:
+    try:
+        import sys
+        _sys_path = os.path.dirname(os.path.abspath(__file__))
+        if _sys_path not in sys.path:
+            sys.path.insert(0, _sys_path)
+        from data_providers import DataAggregator
+        _AGGREGATOR = DataAggregator()
+    except Exception:
+        _AGGREGATOR = None
 
 
 def _safe_scalar(ser: pd.Series, idx: int) -> float:
@@ -281,6 +295,63 @@ def _format_fpe(x: Any) -> str:
     return _format_pe(x)
 
 
+def _build_info_from_aggregator(fundamentals: Dict[str, Any], name: str) -> Dict[str, Any]:
+    """Build info dict compatible with _compute_position from aggregator fundamentals."""
+    div = fundamentals.get("div_yield")
+    div_yield = (div / 100.0) if div is not None and div > 0 else None
+    return {
+        "trailingPE": fundamentals.get("pe"),
+        "forwardPE": fundamentals.get("fwd_pe"),
+        "shortName": name,
+        "longName": name,
+        "name": name,
+        "dividendYield": div_yield,
+        "trailingAnnualDividendYield": div_yield,
+        "dividendRate": None,
+    }
+
+
+def _fetch_position_data_aggregator(tk: str, portfolio_positions: Dict[str, Any], last_ibkr_sync_hours: Optional[float] = None) -> Tuple[pd.DataFrame, Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Fetch hist, info, price_result, data_sources using DataAggregator."""
+    agg = _AGGREGATOR
+    if not agg:
+        return pd.DataFrame(), {}, {"price": 0.0, "source": "none", "data_quality": {}}, {}
+
+    ibkr_price = None
+    pos_data = portfolio_positions.get(tk, {})
+    if pos_data.get("source") == "ibkr" and pos_data.get("market_price"):
+        ibkr_price = float(pos_data["market_price"])
+
+    hist, hist_src = agg.get_history_with_source(tk, "1y")
+    fund = agg.get_fundamentals(tk)
+    price_res = agg.get_price(tk, ibkr_price=ibkr_price, ibkr_sync_age_hours=last_ibkr_sync_hours)
+    earn_data, earn_src = agg.get_earnings_with_source(tk)
+
+    name = tk
+    try:
+        yf_info = yf.Ticker(tk).info or {}
+        name = yf_info.get("shortName") or yf_info.get("longName") or tk
+    except Exception:
+        pass
+
+    info = _build_info_from_aggregator(fund, name)
+    dq = price_res.get("data_quality", {})
+    fund_quality: Dict[str, Any] = {}
+    if fund.get("pe_all_sources"):
+        fund_quality["pe_all_sources"] = fund["pe_all_sources"]
+    if fund.get("pe_conflict"):
+        fund_quality["pe_conflict"] = True
+    data_sources = {
+        "price": price_res.get("source", "none"),
+        "fundamentals": fund.get("source", "none"),
+        "earnings": earn_src,
+        "price_all_sources": price_res.get("all_sources", {}),
+        "data_quality": dq,
+        "fundamentals_quality": fund_quality,
+    }
+    return hist, info, price_res, data_sources
+
+
 def _download_history_batch(tickers: List[str], period: str) -> Dict[str, pd.DataFrame]:
     """
     Fetch price history for ALL tickers in ONE yf.download() call. ~10x faster than per-ticker.
@@ -305,9 +376,11 @@ def _download_history_batch(tickers: List[str], period: str) -> Dict[str, pd.Dat
         if len(tickers) == 1:
             tk = tickers[0]
             if "Close" in df.columns:
-                close = df["Close"].dropna()
-                if not close.empty:
-                    out[tk] = pd.DataFrame({"Close": close})
+                # Keep full OHLCV for history mode (candles + volume)
+                cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+                sub = df[cols].dropna(subset=["Close"])
+                if not sub.empty:
+                    out[tk] = sub
             if tk not in out:
                 out[tk] = pd.DataFrame()
         else:
@@ -500,22 +573,22 @@ def _compute_position(
     hist: pd.DataFrame,
     info: Dict[str, Any],
     fx_rates: Dict[str, float],
+    price_override: Optional[float] = None,
+    data_sources: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     close = hist["Close"].dropna() if not hist.empty and "Close" in hist.columns else pd.Series(dtype=float)
     if len(close) < 2:
-        # Minimal fallback row
-        price_raw = float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
+        price_raw = price_override if price_override and price_override > 0 else float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
         day_chg_pct = 0.0
         spark = [price_raw] * 8
         ret_pct = 0.0
         rsi = 50.0
     else:
-        price_raw = _safe_scalar(close, -1)
+        price_raw = price_override if price_override and price_override > 0 else _safe_scalar(close, -1)
         prev = _safe_scalar(close, -2)
         day_chg_pct = ((price_raw - prev) / prev) * 100.0 if prev else 0.0
         spark = list(map(float, close.tail(8).tolist()))
 
-        # ~4 weeks (~28 days)
         lookback_idx = int(max(0, len(close) - 29))
         base = _safe_scalar(close, lookback_idx) if lookback_idx < len(close) else _safe_scalar(close, 0)
         ret_pct = ((price_raw - base) / base) * 100.0 if base else 0.0
@@ -578,6 +651,8 @@ def _compute_position(
         "tees": portfolio_positions.get(tk, {}).get("tees", ""),
         "target": float(portfolio_positions.get(tk, {}).get("target", 0) or 0),
         "stop_loss": float(portfolio_positions.get(tk, {}).get("stop_loss", 0) or 0),
+        "data_source": data_sources or {},
+        "data_quality": (data_sources or {}).get("data_quality", {}) if data_sources else {},
     }
 
 
@@ -800,22 +875,62 @@ def build_portfolio_json() -> Dict[str, Any]:
     tickers_all: List[str] = list(portfolio_positions.keys())
     fx_rates = _pull_fx_rates()
 
-    # Batch download: ALL tickers in ONE call per period (~10x faster)
-    price_hist_1y = _download_history_batch(tickers_all + SECTOR_ETFS, period="1y")
-    price_hist_3mo = _download_history_batch(tickers_all + ["^GSPC", "^TNX"], period="3mo")
-    price_hist_pos = {tk: price_hist_1y.get(tk, pd.DataFrame()) for tk in tickers_all}
-    corr_hist = {tk: price_hist_3mo.get(tk, pd.DataFrame()) for tk in tickers_all}
-
-    # Fundamentals from Ticker.info — parallel with ThreadPoolExecutor
+    use_aggregator = _AGGREGATOR is not None
+    price_hist_pos: Dict[str, pd.DataFrame] = {}
     tickers_info: Dict[str, Dict[str, Any]] = {tk: {} for tk in tickers_all}
-    with ThreadPoolExecutor(max_workers=min(16, len(tickers_all) + 4)) as ex:
-        futures = {ex.submit(lambda t=tk: (t, (yf.Ticker(t).info or {}))): tk for tk in tickers_all}
-        for fut in as_completed(futures):
-            try:
-                tk, info = fut.result()
-                tickers_info[tk] = info
-            except Exception:
-                pass
+    price_overrides: Dict[str, float] = {}
+    data_sources_by_ticker: Dict[str, Dict[str, str]] = {}
+
+    if use_aggregator:
+        with ThreadPoolExecutor(max_workers=min(12, len(tickers_all) + 2)) as ex:
+            futures = {ex.submit(_fetch_position_data_aggregator, tk, portfolio_positions, None): tk for tk in tickers_all}
+            for fut in as_completed(futures):
+                try:
+                    tk = futures[fut]
+                    hist, info, price_res, ds = fut.result()
+                    price_hist_pos[tk] = hist
+                    tickers_info[tk] = info
+                    if price_res.get("price", 0) > 0:
+                        price_overrides[tk] = price_res["price"]
+                    data_sources_by_ticker[tk] = ds
+                except Exception:
+                    tk = futures[fut]
+                    price_hist_pos[tk] = pd.DataFrame()
+                    tickers_info[tk] = {}
+
+        etf_hist = _download_history_batch(SECTOR_ETFS + ["^GSPC", "^TNX"], period="1y")
+        for etf in SECTOR_ETFS + ["^GSPC", "^TNX"]:
+            if etf not in price_hist_pos:
+                price_hist_pos[etf] = etf_hist.get(etf, pd.DataFrame())
+
+        for tk in tickers_all:
+            ds = data_sources_by_ticker.get(tk, {})
+            dq = ds.get("data_quality", {})
+            DATA_QUALITY[tk] = {
+                "chosenSource": ds.get("price", "none"),
+                "data_source": ds,
+                "price_all_sources": ds.get("price_all_sources", {}),
+                "data_quality": dq,
+                "lastMedian": price_overrides.get(tk),
+            }
+    else:
+        price_hist_1y = _download_history_batch(tickers_all + SECTOR_ETFS, period="1y")
+        price_hist_3mo = _download_history_batch(tickers_all + ["^GSPC", "^TNX"], period="3mo")
+        price_hist_pos = {tk: price_hist_1y.get(tk, pd.DataFrame()) for tk in tickers_all}
+        with ThreadPoolExecutor(max_workers=min(16, len(tickers_all) + 4)) as ex:
+            futures = {ex.submit(lambda t=tk: (t, (yf.Ticker(t).info or {}))): tk for tk in tickers_all}
+            for fut in as_completed(futures):
+                try:
+                    tk, info = fut.result()
+                    tickers_info[tk] = info
+                except Exception:
+                    pass
+
+    corr_hist = {tk: price_hist_pos.get(tk, pd.DataFrame()) for tk in tickers_all}
+    for tk in list(corr_hist.keys()):
+        df = corr_hist[tk]
+        if len(df) > 65:
+            corr_hist[tk] = df.tail(65)
 
     positions: List[Dict[str, Any]] = []
     for tk in tickers_all:
@@ -825,6 +940,8 @@ def build_portfolio_json() -> Dict[str, Any]:
             hist=price_hist_pos.get(tk, pd.DataFrame()),
             info=tickers_info.get(tk, {}),
             fx_rates=fx_rates,
+            price_override=price_overrides.get(tk),
+            data_sources=data_sources_by_ticker.get(tk),
         )
         pos["cat"] = _cat_map(tk)
         positions.append(pos)
@@ -1076,6 +1193,12 @@ def build_portfolio_json() -> Dict[str, Any]:
                 "target": p.get("target", 0),
                 "stop_loss": p.get("stop_loss", 0),
                 "tees": p.get("tees", ""),
+                "shares": p.get("shares", 0),
+                "avg_price": p.get("avg_price", 0),
+                "avg_eur": p.get("avg_eur", 0),
+                "eur_price": p.get("eur_price", 0),
+                "data_source": p.get("data_source", {}),
+                "data_quality": p.get("data_quality", {}),
             }
             for p in positions
         ],
@@ -1096,8 +1219,12 @@ if __name__ == "__main__":
     # History mode for charts (used by frontend modal).
     if args.history and args.ticker:
         try:
-            hist = _download_history_batch([args.ticker], period=args.range)
-            series_df = hist.get(args.ticker, pd.DataFrame())
+            series_df = pd.DataFrame()
+            if _AGGREGATOR:
+                series_df, _ = _AGGREGATOR.get_history_with_source(args.ticker, args.range)
+            if series_df.empty or "Close" not in series_df.columns:
+                hist = _download_history_batch([args.ticker], period=args.range)
+                series_df = hist.get(args.ticker, pd.DataFrame())
             if series_df.empty or "Close" not in series_df.columns:
                 # Fallback: constant series based on avg_price from portfolio_data.json
                 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1107,32 +1234,45 @@ if __name__ == "__main__":
                 price = float(pdata["positions"].get(args.ticker, {}).get("avg_price", 0.0) or 0.0)
                 end = pd.Timestamp.utcnow().normalize()
                 idx = pd.date_range(end=end, periods=30, freq="D")
-                series = pd.Series([price] * len(idx), index=idx, dtype="float64")
-                df = pd.DataFrame({"Close": series})
+                df = pd.DataFrame({"Open": [price] * 30, "High": [price * 1.01] * 30, "Low": [price * 0.99] * 30, "Close": [price] * 30, "Volume": [0] * 30}, index=idx)
             else:
-                df = series_df
+                df = series_df.copy()
 
-            series = df["Close"].dropna()
-            series = series.sort_index()
-            closes = series.astype("float64").tolist()
-            times = [pd.Timestamp(t).to_pydatetime() for t in series.index]
-
-            candles = []
-            prev = None
-            for i, close in enumerate(closes):
-                open_ = float(prev) if prev is not None else float(close)
-                high = max(open_, float(close)) * 1.002
-                low = min(open_, float(close)) * 0.998
-                candles.append(
-                    {
+            df = df.sort_index().dropna(subset=["Close"])
+            if df.empty:
+                candles = []
+                volume = []
+                ma50_list = []
+                ma200_list = []
+                ema21_list = []
+            else:
+                times = [pd.Timestamp(t).to_pydatetime() for t in df.index]
+                candles = []
+                for i in range(len(df)):
+                    row = df.iloc[i]
+                    o = float(row.get("Open", row["Close"]))
+                    h = float(row.get("High", max(o, float(row["Close"]))))
+                    l_ = float(row.get("Low", min(o, float(row["Close"]))))
+                    c = float(row["Close"])
+                    candles.append({
                         "time": int(times[i].timestamp()),
-                        "open": round(open_, 6),
-                        "high": round(high, 6),
-                        "low": round(low, 6),
-                        "close": round(float(close), 6),
-                    }
-                )
-                prev = close
+                        "open": round(o, 6),
+                        "high": round(h, 6),
+                        "low": round(l_, 6),
+                        "close": round(c, 6),
+                    })
+
+                vol_col = df["Volume"] if "Volume" in df.columns else pd.Series(0, index=df.index)
+                volume = [{"time": int(pd.Timestamp(t).timestamp()), "value": int(float(vol_col.loc[t])) if t in vol_col.index else 0} for t in df.index]
+
+                # MA50, MA200, EMA21
+                closes = df["Close"].astype("float64")
+                ma50 = closes.rolling(50, min_periods=1).mean()
+                ma200 = closes.rolling(200, min_periods=1).mean()
+                ema21 = closes.ewm(span=21, adjust=False).mean()
+                ma50_list = [{"time": int(pd.Timestamp(t).timestamp()), "value": round(float(v), 6)} for t, v in zip(ma50.index, ma50)]
+                ma200_list = [{"time": int(pd.Timestamp(t).timestamp()), "value": round(float(v), 6)} for t, v in zip(ma200.index, ma200)]
+                ema21_list = [{"time": int(pd.Timestamp(t).timestamp()), "value": round(float(v), 6)} for t, v in zip(ema21.index, ema21)]
 
             dq = DATA_QUALITY.get(args.ticker, {})
             out = {
@@ -1142,6 +1282,10 @@ if __name__ == "__main__":
                 "lastMedian": dq.get("lastMedian"),
                 "candidates": dq.get("candidates", []),
                 "candles": candles,
+                "ma50": ma50_list,
+                "ma200": ma200_list,
+                "ema21": ema21_list,
+                "volume": volume,
             }
             print(json.dumps(out, ensure_ascii=False))
         except Exception as e:

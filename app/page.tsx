@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type Market = "no" | "us" | "uk" | "dk";
-type Currency = "NOK" | "USD" | "GBX" | "DKK";
+type Currency = "NOK" | "USD" | "GBX" | "GBP" | "DKK";
 type SignalKind = "p" | "n" | "w" | "i";
 type FilterKey = "all" | "sell" | "buy" | "uk-infra" | "reit" | "growth";
 type SortDir = "desc" | "asc";
@@ -35,6 +35,24 @@ type Position = {
   target?: number;
   stop_loss?: number;
   tees?: string;
+  shares?: number;
+  avg_price?: number;
+  avg_eur?: number;
+  eur_price?: number;
+  data_source?: {
+    price?: string;
+    fundamentals?: string;
+    earnings?: string;
+    price_all_sources?: Record<string, number>;
+    fundamentals_quality?: { pe_all_sources?: Record<string, number>; pe_conflict?: boolean };
+  };
+  data_quality?: {
+    price_source?: string;
+    price_confidence?: "high" | "medium" | "low";
+    all_prices?: Record<string, number>;
+    outliers?: string[];
+    conflict?: boolean;
+  };
 };
 
 type Sector = { name: string; pct: number; color: string };
@@ -76,7 +94,13 @@ type PortfolioResponse = {
   correlation: { tickers: string[]; matrix: number[][] };
   news: NewsItem[];
   earnings: EarningItem[];
-  data_quality?: Record<string, { chosenSource?: string; lastMedian?: number }>;
+  data_quality?: Record<string, {
+    chosenSource?: string;
+    lastMedian?: number;
+    data_source?: { price?: string; fundamentals?: string; earnings?: string; fundamentals_quality?: { pe_all_sources?: Record<string, number>; pe_conflict?: boolean } };
+    price_all_sources?: Record<string, number>;
+    data_quality?: { price_source?: string; price_confidence?: "high" | "medium" | "low"; all_prices?: Record<string, number>; outliers?: string[]; conflict?: boolean };
+  }>;
   kpis?: Kpis;
   macro?: { items: MacroItem[] };
 };
@@ -89,6 +113,10 @@ type TickerHistoryResponse = {
   lastMedian?: number;
   candidates?: Array<{ source: string; lastClose: number; len: number }>;
   candles: Candle[];
+  ma50?: Array<{ time: number; value: number }>;
+  ma200?: Array<{ time: number; value: number }>;
+  ema21?: Array<{ time: number; value: number }>;
+  volume?: Array<{ time: number; value: number }>;
 };
 
 type AiAnalyzeResponse = {
@@ -1121,6 +1149,9 @@ export default function Home() {
   const [teesDraft, setTeesDraft] = useState("");
   const [targetDraft, setTargetDraft] = useState<number>(0);
   const [stopDraft, setStopDraft] = useState<number>(0);
+  const [chartPeriod, setChartPeriod] = useState<string>("1A");
+  const [teesSaveLoading, setTeesSaveLoading] = useState(false);
+  const [portfolioSaveLoading, setPortfolioSaveLoading] = useState(false);
 
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -1139,8 +1170,8 @@ export default function Home() {
     setTickerHistoryLoading(true);
     setTickerHistoryError(null);
     setAiAnalyze(null);
-    setChat([]);
     setChatInput("");
+    // Chat ajalugu säilib modal avamise vahel (ei tühjenda)
 
     setTeesDraft(selectedPos?.tees ?? "");
     setTargetDraft(typeof selectedPos?.target === "number" ? selectedPos?.target : 0);
@@ -1148,7 +1179,7 @@ export default function Home() {
 
     void (async () => {
       try {
-        const res = await fetch(`/api/ticker-history?ticker=${encodeURIComponent(selectedTicker)}&range=3mo`);
+        const res = await fetch(`/api/ticker-history?ticker=${encodeURIComponent(selectedTicker)}&period=${chartPeriod}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = (await res.json()) as TickerHistoryResponse;
         setTickerHistory(json);
@@ -1158,7 +1189,7 @@ export default function Home() {
         setTickerHistoryLoading(false);
       }
     })();
-  }, [modalOpen, selectedTicker, selectedPos]);
+  }, [modalOpen, selectedTicker, selectedPos, chartPeriod]);
 
   useEffect(() => {
     if (!modalOpen) return;
@@ -1168,27 +1199,27 @@ export default function Home() {
     if (!tickerHistory.candles?.length) return;
 
     void (async () => {
-      // Ensure we don't stack multiple charts.
       if (lightweightChartRef.current?.chart) {
         try {
           lightweightChartRef.current.chart.remove();
         } catch {
-          // ignore
+          /* ignore */
         }
       }
 
       const lc = await import("lightweight-charts");
-      const { createChart, CandlestickSeries, LineSeries } = lc;
+      const { createChart, CandlestickSeries, LineSeries, HistogramSeries } = lc;
+      const toTime = (t: number) => (t > 1e12 ? t / 1000 : t) as import("lightweight-charts").UTCTimestamp;
+
       const chart = createChart(el, {
         width: el.clientWidth,
-        height: 340,
+        height: 380,
         layout: { background: { color: "transparent" }, textColor: "var(--t1)" },
         grid: { vertLines: { color: "rgba(255,255,255,0.06)" }, horzLines: { color: "rgba(255,255,255,0.06)" } },
         timeScale: { timeVisible: true, secondsVisible: false },
+        rightPriceScale: { borderVisible: false },
       });
 
-      // lightweight-charts expects time in seconds (UTCTimestamp); API may return ms
-      const toTime = (t: number) => (t > 1e12 ? t / 1000 : t) as import("lightweight-charts").UTCTimestamp;
       const candles = tickerHistory.candles.map((c) => ({
         time: toTime(c.time),
         open: c.open,
@@ -1209,46 +1240,87 @@ export default function Home() {
 
       const close = candles.map((c) => c.close);
       const times = candles.map((c) => c.time);
-
-      const addLine = (color: string) => chart.addSeries(LineSeries, { color, lineWidth: 2 });
-      const ma50 = addLine("var(--purple)");
-      const ma200 = addLine("var(--t2)");
-      const ema21 = addLine("var(--amber)");
-
       type LinePoint = { time: (typeof times)[number]; value: number };
-      const computeSMA = (window: number): LinePoint[] => {
-        const out: LinePoint[] = [];
-        for (let i = window - 1; i < close.length; i++) {
-          const slice = close.slice(i - window + 1, i + 1);
-          const avg = slice.reduce((a, b) => a + b, 0) / slice.length;
-          out.push({ time: times[i], value: avg });
-        }
-        return out;
-      };
 
-      const computeEMA = (span: number): LinePoint[] => {
-        const k = 2 / (span + 1);
-        const out: LinePoint[] = [];
-        let ema = close[0];
-        out.push({ time: times[0], value: ema });
-        for (let i = 1; i < close.length; i++) {
-          ema = close[i] * k + ema * (1 - k);
-          out.push({ time: times[i], value: ema });
-        }
-        return out;
-      };
+      const addLine = (color: string, lineStyle?: number) =>
+        chart.addSeries(LineSeries, { color, lineWidth: 2, lineStyle: lineStyle ?? 0 });
+      const ma50Line = addLine("#ffb830");
+      const ma200Line = addLine("#8b5cf6");
+      const ema21Line = addLine("#4d8dff", 2);
 
-      ma50.setData(computeSMA(50));
-      ma200.setData(computeSMA(200));
-      ema21.setData(computeEMA(21));
+      const ma50Data =
+        tickerHistory.ma50?.length && tickerHistory.ma50.length === candles.length
+          ? tickerHistory.ma50.map((p) => ({ time: toTime(p.time), value: p.value }))
+          : (() => {
+              const out: LinePoint[] = [];
+              for (let i = 49; i < close.length; i++) {
+                const slice = close.slice(i - 49, i + 1);
+                out.push({ time: times[i], value: slice.reduce((a, b) => a + b, 0) / slice.length });
+              }
+              return out;
+            })();
+      const ma200Data =
+        tickerHistory.ma200?.length && tickerHistory.ma200.length === candles.length
+          ? tickerHistory.ma200.map((p) => ({ time: toTime(p.time), value: p.value }))
+          : (() => {
+              const out: LinePoint[] = [];
+              for (let i = 199; i < close.length; i++) {
+                const slice = close.slice(i - 199, i + 1);
+                out.push({ time: times[i], value: slice.reduce((a, b) => a + b, 0) / slice.length });
+              }
+              return out;
+            })();
+      const ema21Data =
+        tickerHistory.ema21?.length && tickerHistory.ema21.length === candles.length
+          ? tickerHistory.ema21.map((p) => ({ time: toTime(p.time), value: p.value }))
+          : (() => {
+              const k = 2 / 22;
+              const out: LinePoint[] = [{ time: times[0], value: close[0] }];
+              for (let i = 1; i < close.length; i++) {
+                out.push({ time: times[i], value: close[i] * k + out[out.length - 1].value * (1 - k) });
+              }
+              return out;
+            })();
+
+      ma50Line.setData(ma50Data);
+      ma200Line.setData(ma200Data);
+      ema21Line.setData(ema21Data);
+
+      if (selectedPos?.avg_price) {
+        const avgLine = addLine("var(--t2)", 1);
+        avgLine.setData(times.map((t, i) => ({ time: t, value: selectedPos!.avg_price! })));
+      }
+      if (selectedPos?.target && selectedPos.target > 0) {
+        const targetLine = addLine("var(--green)", 2);
+        targetLine.setData(times.map((t) => ({ time: t, value: selectedPos!.target! })));
+      }
+      if (selectedPos?.stop_loss && selectedPos.stop_loss > 0) {
+        const stopLine = addLine("var(--red)", 2);
+        stopLine.setData(times.map((t) => ({ time: t, value: selectedPos!.stop_loss! })));
+      }
+
+      if (tickerHistory.volume?.length) {
+        try {
+          const volSeries = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "" });
+          volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 } });
+          const volMap = new Map(tickerHistory.volume.map((v) => [toTime(v.time), v.value]));
+          volSeries.setData(
+            candles.map((c) => ({
+              time: c.time,
+              value: volMap.get(c.time) ?? 0,
+              color: c.close >= c.open ? "rgba(0,214,143,0.4)" : "rgba(255,71,87,0.4)",
+            }))
+          );
+        } catch {
+          /* volume overlay optional */
+        }
+      }
 
       lightweightChartRef.current = { chart };
     })();
 
-    return () => {
-      // Keep it lightweight: chart will be removed when modal closes.
-    };
-  }, [modalOpen, tickerHistory]);
+    return () => {};
+  }, [modalOpen, tickerHistory, selectedPos]);
 
   return (
     <>
@@ -1638,7 +1710,15 @@ export default function Home() {
                     const pricePrefix = p.cur === "GBX" ? "£" : p.cur === "USD" ? "$" : "";
                     const displayPrice = `${pricePrefix}${p.price.toFixed(2)}`;
 
-                    const chosenSource = portfolioData.data_quality?.[p.tk]?.chosenSource;
+                    const dqRow = p.data_quality ?? portfolioData.data_quality?.[p.tk]?.data_quality;
+                    const dqTop = portfolioData.data_quality?.[p.tk];
+                    const chosenSource = dqRow?.price_source ?? dqTop?.chosenSource;
+                    const allSrc = dqRow?.all_prices ?? dqTop?.price_all_sources ?? {};
+                    const sourceCount = Object.keys(allSrc).length;
+                    const sourceTooltip = sourceCount
+                      ? Object.entries(allSrc).map(([k, v]) => `${k}: ${typeof v === "number" ? v.toFixed(2) : v}`).join(" | ")
+                      : chosenSource ? `Allikas: ${chosenSource}` : undefined;
+                    const singleSource = sourceCount <= 1 && chosenSource && chosenSource !== "none";
 
                     return (
                       <tr
@@ -1650,9 +1730,9 @@ export default function Home() {
                         }}
                       >
                         <td className="cell-ticker">
-                          <div className="tk" title={chosenSource ? `Data source: ${chosenSource}` : undefined}>
+                          <div className="tk" title={sourceTooltip} style={singleSource ? { borderBottom: "1px dotted var(--amber)" } : undefined}>
                             {p.tk}
-                            {p.flagged ? " ⚠" : ""}
+                            {(p.flagged || p.data_quality?.price_confidence === "low") ? " ⚠" : ""}
                           </div>
                           <div className="tk-name">{p.name}</div>
                         </td>
@@ -2084,11 +2164,10 @@ export default function Home() {
             setSelectedTicker(null);
             setTickerHistory(null);
             setAiAnalyze(null);
-            setChat([]);
             try {
               if (lightweightChartRef.current?.chart) lightweightChartRef.current.chart.remove();
             } catch {
-              // ignore
+              /* ignore */
             }
             lightweightChartRef.current = null;
           }}
@@ -2096,29 +2175,22 @@ export default function Home() {
           aria-modal="true"
         >
           <style>{`
-            .modal-backdrop{
-              position:fixed; inset:0; background:rgba(0,0,0,0.62);
-              display:flex; align-items:flex-start; justify-content:center;
-              padding:72px 18px 18px; z-index:9999;
-            }
-            .modal{
-              width:min(1100px, 100%);
-              background:var(--bg2); border:1px solid var(--border);
-              border-radius:16px; overflow:hidden;
-              box-shadow:0 18px 60px rgba(0,0,0,0.55);
-            }
-            .modal-head{
-              padding:12px 16px; display:flex; justify-content:space-between; align-items:center;
-              border-bottom:1px solid rgba(26,31,50,0.55);
-              background:linear-gradient(180deg, rgba(11,14,22,0.92), rgba(11,14,22,0.78));
-            }
-            .modal-title{font-family:var(--font-mono); font-weight:800;}
-            .icon-btn{background:transparent; border:1px solid var(--border); color:var(--t2);
-              padding:6px 10px; border-radius:10px; cursor:pointer; font-family:var(--font-mono);}
-            .modal-body{padding:14px 16px;}
-            .modal-grid{display:grid; grid-template-columns: 1.35fr 1fr; gap:12px;}
-            .modal-card{background:var(--bg3); border:1px solid var(--border); border-radius:14px; padding:12px;}
-            .modal-row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+            .modal-backdrop{position:fixed;inset:0;background:var(--bg);display:flex;align-items:stretch;justify-content:center;z-index:9999;}
+            .modal{width:100%;max-width:1600px;display:grid;grid-template-columns:60% 40%;background:var(--bg2);border:1px solid var(--border);overflow:hidden;}
+            .modal-left,.modal-right{overflow-y:auto;padding:20px;}
+            .modal-left{border-right:1px solid var(--border);}
+            .modal-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;}
+            .modal-title{font-family:var(--font-mono);font-weight:800;font-size:18px;}
+            .icon-btn{background:transparent;border:1px solid var(--border);color:var(--t2);padding:8px 12px;border-radius:10px;cursor:pointer;font-family:var(--font-mono);}
+            .modal-period{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;}
+            .period-btn{padding:6px 10px;border-radius:8px;font-size:11px;font-family:var(--font-mono);cursor:pointer;background:var(--bg3);border:1px solid var(--border);color:var(--t2);}
+            .period-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+            .modal-card{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px;}
+            .fund-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;}
+            .fund-item{background:var(--bg4);border-radius:8px;padding:10px;text-align:center;}
+            .fund-val{font-family:var(--font-mono);font-weight:700;font-size:14px;}
+            .fund-label{font-size:9px;color:var(--t3);text-transform:uppercase;margin-top:4px;}
+            .modal-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
             input, textarea{
               background:rgba(0,0,0,0); border:1px solid rgba(26,31,50,0.9);
               color:var(--t1); border-radius:10px; padding:8px 10px; font-family:var(--font-mono);
@@ -2129,25 +2201,123 @@ export default function Home() {
             .btn{cursor:pointer;}
           `}</style>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <div className="modal-title">
-                {selectedTicker} · positsioon detailid
-              </div>
-              <button className="icon-btn" type="button" onClick={() => setModalOpen(false)}>
-                ✕
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="modal-grid">
-                <div className="modal-card">
-                  <div className="section-head" style={{ marginBottom: 10 }}>
-                    <h2 style={{ margin: 0 }}>Küünlakuju + MA</h2>
-                    <div style={{ color: "var(--t3)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                      {tickerHistoryLoading ? "Laen graafikut..." : tickerHistoryError ? "Graafik ebaõnnestus" : `Allikas: ${tickerHistory?.chosenSource ?? "—"}`}
+            <div className="modal-left">
+              <div className="modal-head">
+                <div>
+                  <div className="modal-title">{selectedTicker} · {selectedPos?.name ?? "—"}</div>
+                  <div style={{ fontSize: 11, color: "var(--t3)", marginTop: 4 }}>{selectedPos?.cat || "—"} · {selectedPos?.mkt?.toUpperCase() ?? "—"}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 10 }}>
+                    <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "var(--font-mono)" }}>
+                      {selectedPos?.cur === "USD" ? "$" : selectedPos?.cur === "GBP" ? "£" : ""}{selectedPos?.price?.toFixed(2) ?? "—"}
+                    </span>
+                    <span className={`chg ${(selectedPos?.chg ?? 0) >= 0 ? "pos" : "neg"}`} style={{ fontSize: 14 }}>
+                      {(selectedPos?.chg ?? 0) >= 0 ? "+" : ""}{(selectedPos?.chg ?? 0).toFixed(2)}%
+                    </span>
+                    <span style={{ fontSize: 12, color: "var(--t2)" }}>€{(selectedPos?.eur ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}</span>
+                    <div className="score" style={{ width: 44, height: 44 }}>
+                      <svg viewBox="0 0 36 36" style={{ width: 44, height: 44 }}>
+                        <circle cx="18" cy="18" r="16" fill="none" stroke="var(--bg5)" strokeWidth="3" />
+                        <circle cx="18" cy="18" r="16" fill="none" stroke={(selectedPos?.score ?? 0) >= 0 ? "var(--green)" : "var(--red)"} strokeWidth="3" strokeDasharray={`${(Math.min(100, Math.max(0, selectedPos?.score ?? 0)) / 100) * 100.5} 100.5`} strokeLinecap="round" transform="rotate(-90 18 18)" />
+                      </svg>
+                      <span className="val" style={{ fontSize: 11 }}>{selectedPos?.score ?? 0}</span>
                     </div>
+                    <span style={{ fontWeight: 700, fontSize: 12, color: aiAnalyze?.signal === "OST" || aiAnalyze?.signal === "HOIA" ? "var(--green)" : aiAnalyze?.signal === "MÜÜ" ? "var(--red)" : "var(--amber)" }}>
+                      {aiAnalyze?.signal ?? selectedPos?.sigs?.[0] ?? "—"}
+                    </span>
                   </div>
-                  <div ref={chartContainerRef} style={{ width: "100%", height: 340 }} />
                 </div>
+                <button className="icon-btn" type="button" onClick={() => setModalOpen(false)}>✕</button>
+              </div>
+              <div className="modal-card">
+                <div className="modal-period">
+                  {["1N", "1K", "3K", "6K", "1A", "3A"].map((p) => (
+                    <button key={p} className={`period-btn ${chartPeriod === p ? "active" : ""}`} onClick={() => setChartPeriod(p)}>{p}</button>
+                  ))}
+                </div>
+                <div style={{ color: "var(--t3)", fontSize: 11, marginBottom: 8 }}>
+                  {tickerHistoryLoading ? "Laen graafikut..." : tickerHistoryError ? "Graafik ebaõnnestus" : `Allikas: ${tickerHistory?.chosenSource ?? "—"}`}
+                </div>
+                <div ref={chartContainerRef} style={{ width: "100%", height: 380 }} />
+              </div>
+              <div className="modal-card">
+                <div className="fund-grid">
+                  {[
+                    { label: "P/E", val: selectedPos?.pe ?? "—", good: selectedPos?.pe && selectedPos.pe !== "—" ? parseFloat(selectedPos.pe) < 25 : null },
+                    { label: "fwd P/E", val: selectedPos?.fpe ?? "—", good: selectedPos?.fpe && selectedPos.fpe !== "—" ? parseFloat(selectedPos.fpe) < 20 : null },
+                    { label: "EV/EBITDA", val: "—", good: null },
+                    { label: "ROE", val: "—", good: null },
+                    { label: "Rev kasv", val: "—", good: null },
+                    { label: "EPS kasv", val: "—", good: null },
+                  ].map((f, i) => (
+                    <div key={i} className="fund-item">
+                      <div className="fund-val" style={{ color: f.good === true ? "var(--green)" : f.good === false ? "var(--red)" : "var(--t1)" }}>{f.val}</div>
+                      <div className="fund-label">{f.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="modal-card">
+                <div style={{ fontSize: 11, lineHeight: 1.8, fontFamily: "var(--font-mono)" }}>
+                  <div>Aktsiad: {selectedPos?.shares?.toLocaleString() ?? "—"} | Avg: {(selectedPos?.avg_price ?? 0).toFixed(2)} {selectedPos?.cur ?? ""} | Investeeritud: €{((selectedPos?.avg_eur ?? 0) * (selectedPos?.shares ?? 0)).toLocaleString("de-DE", { maximumFractionDigits: 0 })}</div>
+                  <div>Praegune väärtus: €{(selectedPos?.eur ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })} | Tootlus: {((selectedPos?.eur ?? 0) - (selectedPos?.avg_eur ?? 0) * (selectedPos?.shares ?? 0)) >= 0 ? "+" : ""}€{(((selectedPos?.eur ?? 0) - (selectedPos?.avg_eur ?? 0) * (selectedPos?.shares ?? 0))).toLocaleString("de-DE", { maximumFractionDigits: 0 })} ({(selectedPos?.avg_eur ?? 0) * (selectedPos?.shares ?? 0) > 0 ? ((((selectedPos?.eur ?? 0) - (selectedPos?.avg_eur ?? 0) * (selectedPos?.shares ?? 0)) / ((selectedPos?.avg_eur ?? 0) * (selectedPos?.shares ?? 0))) * 100).toFixed(1) : "0"}%)</div>
+                  <div>Div yield: {(selectedPos?.div ?? 0).toFixed(1)}% | Aasta dividend: ~€{(((selectedPos?.eur ?? 0) * ((selectedPos?.div ?? 0) / 100))).toLocaleString("de-DE", { maximumFractionDigits: 0 })}</div>
+                </div>
+              </div>
+              {(selectedPos?.data_source || selectedPos?.data_quality || portfolioData.data_quality?.[selectedTicker ?? ""]) && (
+                <div className="modal-card">
+                  <h3 style={{ margin: "0 0 10px 0", fontSize: 14 }}>Andmeallikad</h3>
+                  <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", lineHeight: 1.8 }}>
+                    {(() => {
+                      const dq = selectedPos?.data_quality ?? portfolioData.data_quality?.[selectedTicker ?? ""]?.data_quality ?? {};
+                      const ds = selectedPos?.data_source ?? portfolioData.data_quality?.[selectedTicker ?? ""]?.data_source ?? {};
+                      const allPrices = dq.all_prices ?? portfolioData.data_quality?.[selectedTicker ?? ""]?.price_all_sources ?? {};
+                      const outliers = dq.outliers ?? [];
+                      const conflict = dq.conflict ?? false;
+                      const priceSrc = dq.price_source ?? ds.price ?? portfolioData.data_quality?.[selectedTicker ?? ""]?.chosenSource ?? "—";
+                      const confidence = dq.price_confidence ?? "low";
+                      const fundSrc = ds.fundamentals ?? "—";
+                      const earnSrc = ds.earnings ?? "—";
+                      const isFallback = (s: string) => !s || s === "yfinance" || s === "yahoo_http" || s === "none";
+                      const getSourceStatus = (src: string) => {
+                        if (outliers.includes(src)) return "❌";
+                        if (conflict && src !== priceSrc) return "⚠";
+                        return "✅";
+                      };
+                      return (
+                        <>
+                          <div style={{ marginBottom: 8, fontWeight: 600 }}>Usaldus: {confidence === "high" ? "kõrge" : confidence === "medium" ? "keskmine" : "madalam"}</div>
+                          <div style={{ marginBottom: 8 }}>Hind (valitud: {priceSrc}):</div>
+                          {Object.entries(allPrices).length ? (
+                            Object.entries(allPrices).map(([k, v]) => (
+                              <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                                <span>{getSourceStatus(k)}</span>
+                                <span>{k}:</span>
+                                <span style={{ color: outliers.includes(k) ? "var(--red)" : "var(--t1)" }}>{typeof v === "number" ? v.toFixed(2) : v}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <div style={{ color: "var(--t3)" }}>—</div>
+                          )}
+                          <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+                            <div>Fundamentaalid: <span style={{ color: isFallback(fundSrc) ? "var(--amber)" : "var(--green)" }}>{fundSrc}</span></div>
+                            {ds.fundamentals_quality?.pe_all_sources && (
+                              <div style={{ marginTop: 6 }}>
+                                P/E allikad: {Object.entries(ds.fundamentals_quality.pe_all_sources).map(([k, v]) => `${k}: ${v.toFixed(1)}`).join(" | ")}
+                                {ds.fundamentals_quality.pe_conflict && (
+                                  <span style={{ color: "var(--amber)", marginLeft: 6 }}>⚠ kontrolli</span>
+                                )}
+                              </div>
+                            )}
+                            <div>Earnings: <span style={{ color: isFallback(earnSrc) ? "var(--amber)" : "var(--green)" }}>{earnSrc}</span></div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-right">
                 <div className="modal-card">
                   <div className="section-head" style={{ marginBottom: 10 }}>
                     <h2 style={{ margin: 0 }}>AI analüüs + salvestus</h2>
@@ -2246,9 +2416,6 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-              </div>
-
-              <div style={{ height: 12 }} />
 
               <div className="modal-card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10 }}>
@@ -2307,6 +2474,39 @@ export default function Home() {
                   >
                     Saada
                   </div>
+                </div>
+              </div>
+              <div className="modal-card">
+                <h3 style={{ margin: "0 0 10px 0", fontSize: 14 }}>Target & Stop-loss</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <label style={{ fontSize: 10, color: "var(--t3)" }}>Target</label>
+                    <input type="number" value={targetDraft || ""} onChange={(e) => setTargetDraft(Number(e.target.value) || 0)} placeholder="—" />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, color: "var(--t3)" }}>Stop-loss</label>
+                    <input type="number" value={stopDraft || ""} onChange={(e) => setStopDraft(Number(e.target.value) || 0)} placeholder="—" />
+                  </div>
+                </div>
+                <div className="modal-actions">
+                  <div className="btn sm" onClick={() => { if (!selectedTicker) return; setPortfolioSaveLoading(true); fetch("/api/portfolio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "update", ticker: selectedTicker, target: targetDraft, stop_loss: stopDraft, tees: teesDraft }) }).finally(() => setPortfolioSaveLoading(false)); }} role="button" tabIndex={0}>
+                    {portfolioSaveLoading ? "Salvestan..." : "Salvesta"}
+                  </div>
+                </div>
+              </div>
+              <div className="modal-card">
+                <h3 style={{ margin: "0 0 10px 0", fontSize: 14 }}>Seotud uudised</h3>
+                <div style={{ maxHeight: 200, overflow: "auto" }}>
+                  {(portfolioData.news ?? []).filter((n) => n.tag?.toUpperCase().includes(selectedTicker?.split(".")[0] ?? "")).slice(0, 5).map((n, i) => (
+                    <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid rgba(26,31,50,0.4)", fontSize: 11 }}>
+                      <span className={`news-impact ${n.impact}`} style={{ marginRight: 6 }}>{n.impact}</span>
+                      <span style={{ color: "var(--t2)" }}>{n.time}</span>
+                      <div style={{ marginTop: 4, color: "var(--t1)" }}>{n.headline}</div>
+                    </div>
+                  ))}
+                  {!(portfolioData.news ?? []).filter((n) => n.tag?.toUpperCase().includes(selectedTicker?.split(".")[0] ?? "")).length && (
+                    <div style={{ color: "var(--t3)", fontSize: 11 }}>Uudiseid ei leitud</div>
+                  )}
                 </div>
               </div>
             </div>
