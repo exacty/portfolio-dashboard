@@ -313,6 +313,21 @@ tbody tr.flagged:hover{background:rgba(255,71,87,0.04)}
 .advisor-msg strong{color:var(--t1)}
 .advisor-actions{display:flex;gap:4px;flex-wrap:wrap}
 
+/* AI CHAT (sidebar) */
+.ai-chat{background:var(--bg3);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;margin-top:10px}
+.chat-messages{max-height:400px;overflow-y:auto;padding:10px}
+.user-msg,.ai-msg{padding:8px 10px;margin-bottom:8px;border-radius:8px;font-size:11px;line-height:1.5}
+.user-msg{background:var(--blue-bg);border:1px solid var(--blue);margin-left:20px}
+.ai-msg{background:var(--bg4);border:1px solid var(--border);margin-right:20px}
+.user-msg::before,.ai-msg::before{font-size:9px;font-weight:600;color:var(--t3);display:block;margin-bottom:4px}
+.user-msg::before{content:"Sina"}
+.ai-msg::before{content:"AI Haldur"}
+.chat-input{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border)}
+.chat-input input{flex:1;background:var(--bg4);border:1px solid var(--border);color:var(--t1);border-radius:8px;padding:8px 12px;font-size:11px;font-family:var(--font-mono)}
+.chat-input input::placeholder{color:var(--t4)}
+.chat-input button{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:600;cursor:pointer}
+.chat-input button:disabled{opacity:0.6;cursor:not-allowed}
+
 /* NEWS FEED */
 .news-item{padding:8px 0;border-bottom:1px solid rgba(26,31,50,0.4)}
 .news-item:last-child{border:none}
@@ -1155,6 +1170,9 @@ export default function Home() {
 
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [sidebarChatMessages, setSidebarChatMessages] = useState<Array<{ role: "user" | "ai"; content: string }>>([]);
+  const [sidebarChatInput, setSidebarChatInput] = useState("");
+  const [sidebarChatLoading, setSidebarChatLoading] = useState(false);
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const lightweightChartRef = useRef<{ chart: { remove: () => void } } | null>(null);
@@ -1399,6 +1417,9 @@ export default function Home() {
                     : ibkrSyncResult.error ?? "Viga"}
                 </div>
               ) : null}
+              <Link className="btn primary" href="/alpha" style={{ textDecoration: "none" }}>
+                🧠 ALPHA
+              </Link>
               <div className="btn" onClick={handleToggleView} role="button" tabIndex={0}>
                 ◫ Vaade
               </div>
@@ -1849,6 +1870,85 @@ export default function Home() {
                   <div className="btn sm" onClick={() => window.console.log("Arutle vastu")} role="button" tabIndex={0}>
                     Arutle vastu
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* AI CHAT */}
+            <div className="sb-section">
+              <div className="sb-title">Vestlus portfellihalduriga</div>
+              <div className="ai-chat">
+                <div className="chat-messages">
+                  {sidebarChatMessages.length === 0 ? (
+                    <div style={{ fontSize: 11, color: "var(--t3)", padding: 12, textAlign: "center" }}>
+                      Küsi portfellihaldurilt — ta teab kogu portfelli konteksti
+                    </div>
+                  ) : (
+                    sidebarChatMessages.map((m, i) => (
+                      <div key={i} className={m.role === "user" ? "user-msg" : "ai-msg"}>
+                        {m.role === "user" ? (
+                          <p style={{ margin: 0 }}>{m.content}</p>
+                        ) : (
+                          <div style={{ margin: 0 }} dangerouslySetInnerHTML={{ __html: m.content || "—" }} />
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="chat-input">
+                  <input
+                    placeholder="Küsi portfellihaldurilt..."
+                    value={sidebarChatInput}
+                    onChange={(e) => setSidebarChatInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        const msg = sidebarChatInput.trim();
+                        if (msg && !sidebarChatLoading) {
+                          setSidebarChatInput("");
+                          setSidebarChatMessages((prev) => [...prev, { role: "user", content: msg }]);
+                          setSidebarChatLoading(true);
+                          fetch("/api/ai", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "portfolio_chat", message: msg }),
+                          })
+                            .then((res) => res.json())
+                            .then((data) => {
+                              const reply = typeof data.replyHtml === "string" ? data.replyHtml : data.error ?? "Vastus puudub.";
+                              setSidebarChatMessages((prev) => [...prev, { role: "ai", content: reply }]);
+                            })
+                            .catch(() => setSidebarChatMessages((prev) => [...prev, { role: "ai", content: "Viga ühendusel." }]))
+                            .finally(() => setSidebarChatLoading(false));
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!sidebarChatInput.trim() || sidebarChatLoading}
+                    onClick={() => {
+                      const msg = sidebarChatInput.trim();
+                      if (!msg || sidebarChatLoading) return;
+                      setSidebarChatInput("");
+                      setSidebarChatMessages((prev) => [...prev, { role: "user", content: msg }]);
+                      setSidebarChatLoading(true);
+                      fetch("/api/ai", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "portfolio_chat", message: msg }),
+                      })
+                        .then((res) => res.json())
+                        .then((data) => {
+                          const reply = typeof data.replyHtml === "string" ? data.replyHtml : data.error ?? "Vastus puudub.";
+                          setSidebarChatMessages((prev) => [...prev, { role: "ai", content: reply }]);
+                        })
+                        .catch(() => setSidebarChatMessages((prev) => [...prev, { role: "ai", content: "Viga ühendusel." }]))
+                        .finally(() => setSidebarChatLoading(false));
+                    }}
+                  >
+                    {sidebarChatLoading ? "..." : "Saada"}
+                  </button>
                 </div>
               </div>
             </div>
