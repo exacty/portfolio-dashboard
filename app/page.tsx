@@ -131,6 +131,11 @@ type AiAnalyzeResponse = {
 };
 
 type AiChatResponse = { replyHtml: string };
+type TickerEarningsResponse = {
+  ticker: string;
+  quarterlyEarnings: Array<{ date: string; eps: number | null; epsGrowth?: number }>;
+  canslim: Record<string, string>;
+};
 type ChatMessage = { role: "user" | "ai"; text?: string; html?: string };
 
 const styles = `
@@ -1176,6 +1181,7 @@ export default function Home() {
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const lightweightChartRef = useRef<{ chart: { remove: () => void } } | null>(null);
+  const [tickerEarnings, setTickerEarnings] = useState<TickerEarningsResponse | null>(null);
 
   const selectedPos = useMemo(() => {
     if (!selectedTicker) return null;
@@ -1197,10 +1203,19 @@ export default function Home() {
 
     void (async () => {
       try {
-        const res = await fetch(`/api/ticker-history?ticker=${encodeURIComponent(selectedTicker)}&period=${chartPeriod}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as TickerHistoryResponse;
+        const [histRes, earnRes] = await Promise.all([
+          fetch(`/api/ticker-history?ticker=${encodeURIComponent(selectedTicker)}&period=${chartPeriod}`),
+          fetch(`/api/ticker-earnings?ticker=${encodeURIComponent(selectedTicker)}`),
+        ]);
+        if (!histRes.ok) throw new Error(`HTTP ${histRes.status}`);
+        const json = (await histRes.json()) as TickerHistoryResponse;
         setTickerHistory(json);
+        if (earnRes.ok) {
+          const earn = (await earnRes.json()) as TickerEarningsResponse;
+          setTickerEarnings(earn);
+        } else {
+          setTickerEarnings(null);
+        }
       } catch (e) {
         setTickerHistoryError(String(e));
       } finally {
@@ -1227,7 +1242,10 @@ export default function Home() {
 
       const lc = await import("lightweight-charts");
       const { createChart, CandlestickSeries, LineSeries, HistogramSeries } = lc;
-      const toTime = (t: number) => (t > 1e12 ? t / 1000 : t) as import("lightweight-charts").UTCTimestamp;
+      const toTime = (t: number): number => {
+        const sec = t > 1e12 ? Math.floor(t / 1000) : Math.floor(t);
+        return sec as import("lightweight-charts").UTCTimestamp;
+      };
 
       const chart = createChart(el, {
         width: el.clientWidth,
@@ -1238,12 +1256,13 @@ export default function Home() {
         rightPriceScale: { borderVisible: false },
       });
 
-      const candles = tickerHistory.candles.map((c) => ({
-        time: toTime(c.time),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
+      const rawCandles = [...tickerHistory.candles].sort((a, b) => (a.time || 0) - (b.time || 0));
+      const candles = rawCandles.map((c) => ({
+        time: toTime(c.time) as import("lightweight-charts").UTCTimestamp,
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
       }));
 
       const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -1258,44 +1277,56 @@ export default function Home() {
 
       const close = candles.map((c) => c.close);
       const times = candles.map((c) => c.time);
-      type LinePoint = { time: (typeof times)[number]; value: number };
+      type UTCT = import("lightweight-charts").UTCTimestamp;
+      type LinePoint = { time: UTCT; value: number };
 
       const addLine = (color: string, lineStyle?: number) =>
         chart.addSeries(LineSeries, { color, lineWidth: 2, lineStyle: lineStyle ?? 0 });
       const ma50Line = addLine("#ffb830");
       const ma200Line = addLine("#8b5cf6");
       const ema21Line = addLine("#4d8dff", 2);
-
-      const ma50Data =
-        tickerHistory.ma50?.length && tickerHistory.ma50.length === candles.length
-          ? tickerHistory.ma50.map((p) => ({ time: toTime(p.time), value: p.value }))
+      const ma50FromApi = tickerHistory.ma50
+        ?.filter((p) => p.value != null && !Number.isNaN(p.value))
+        .map((p) => ({ time: toTime(p.time) as UTCT, value: Number(p.value) }))
+        .sort((a, b) => a.time - b.time);
+      const ma50Data: LinePoint[] =
+        ma50FromApi && ma50FromApi.length > 0
+          ? ma50FromApi
           : (() => {
               const out: LinePoint[] = [];
               for (let i = 49; i < close.length; i++) {
                 const slice = close.slice(i - 49, i + 1);
-                out.push({ time: times[i], value: slice.reduce((a, b) => a + b, 0) / slice.length });
+                out.push({ time: times[i] as UTCT, value: slice.reduce((a, b) => a + b, 0) / slice.length });
               }
               return out;
             })();
-      const ma200Data =
-        tickerHistory.ma200?.length && tickerHistory.ma200.length === candles.length
-          ? tickerHistory.ma200.map((p) => ({ time: toTime(p.time), value: p.value }))
+      const ma200FromApi = tickerHistory.ma200
+        ?.filter((p) => p.value != null && !Number.isNaN(p.value))
+        .map((p) => ({ time: toTime(p.time) as UTCT, value: Number(p.value) }))
+        .sort((a, b) => a.time - b.time);
+      const ma200Data: LinePoint[] =
+        ma200FromApi && ma200FromApi.length > 0
+          ? ma200FromApi
           : (() => {
               const out: LinePoint[] = [];
               for (let i = 199; i < close.length; i++) {
                 const slice = close.slice(i - 199, i + 1);
-                out.push({ time: times[i], value: slice.reduce((a, b) => a + b, 0) / slice.length });
+                out.push({ time: times[i] as UTCT, value: slice.reduce((a, b) => a + b, 0) / slice.length });
               }
               return out;
             })();
-      const ema21Data =
-        tickerHistory.ema21?.length && tickerHistory.ema21.length === candles.length
-          ? tickerHistory.ema21.map((p) => ({ time: toTime(p.time), value: p.value }))
+      const ema21FromApi = tickerHistory.ema21
+        ?.filter((p) => p.value != null && !Number.isNaN(p.value))
+        .map((p) => ({ time: toTime(p.time) as UTCT, value: Number(p.value) }))
+        .sort((a, b) => a.time - b.time);
+      const ema21Data: LinePoint[] =
+        ema21FromApi && ema21FromApi.length > 0
+          ? ema21FromApi
           : (() => {
               const k = 2 / 22;
-              const out: LinePoint[] = [{ time: times[0], value: close[0] }];
+              const out: LinePoint[] = [{ time: times[0] as UTCT, value: close[0] }];
               for (let i = 1; i < close.length; i++) {
-                out.push({ time: times[i], value: close[i] * k + out[out.length - 1].value * (1 - k) });
+                out.push({ time: times[i] as UTCT, value: close[i] * k + out[out.length - 1].value * (1 - k) });
               }
               return out;
             })();
@@ -1321,13 +1352,17 @@ export default function Home() {
         try {
           const volSeries = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "" });
           volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 } });
-          const volMap = new Map(tickerHistory.volume.map((v) => [toTime(v.time), v.value]));
+          const volMap = new Map(tickerHistory.volume.map((v) => [toTime(v.time), Number(v.value) || 0]));
+          const volByIndex = tickerHistory.volume;
           volSeries.setData(
-            candles.map((c) => ({
-              time: c.time,
-              value: volMap.get(c.time) ?? 0,
-              color: c.close >= c.open ? "rgba(0,214,143,0.4)" : "rgba(255,71,87,0.4)",
-            }))
+            candles.map((c, i) => {
+              const val = volMap.get(c.time) ?? (volByIndex?.[i] ? Number((volByIndex[i] as { value?: number }).value) || 0 : 0);
+              return {
+                time: c.time,
+                value: val,
+                color: c.close >= c.open ? "rgba(0,214,143,0.4)" : "rgba(255,71,87,0.4)",
+              };
+            })
           );
         } catch {
           /* volume overlay optional */
@@ -2196,15 +2231,18 @@ export default function Home() {
                         <div className="skel skel-short" style={{ width: 160, height: 16, marginTop: 10 }} />
                       </div>
                     ))
-                  : portfolioData.news.map((n) => (
+                  : portfolioData.news.map((n) => {
+                      const raw = n.headline ?? "";
+                      const decoded = raw.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+                      return (
                       <div className="news-item" key={`${n.time}-${n.tag}`}>
                         <div className="news-time">{n.time} CET</div>
-                        <div className="news-headline" dangerouslySetInnerHTML={{ __html: n.headline }} />
+                        <div className="news-headline" dangerouslySetInnerHTML={{ __html: decoded }} />
                         <div className={`news-impact ${n.impact}`}>
                           {n.impact === "bull" ? "↑ Bullish" : n.impact === "bear" ? "↓ Bearish" : "— Neutraalne"} · {n.tag}
                         </div>
                       </div>
-                    ))}
+                    );})}
               </div>
             </div>
 
@@ -2339,6 +2377,47 @@ export default function Home() {
                 </div>
                 <div ref={chartContainerRef} style={{ width: "100%", height: 380 }} />
               </div>
+              {tickerEarnings && (tickerEarnings.quarterlyEarnings.length > 0 || Object.keys(tickerEarnings.canslim || {}).length > 0) && (
+                <div className="modal-card">
+                  <h3 style={{ margin: "0 0 10px 0", fontSize: 14 }}>O&apos;Neil CANSLIM</h3>
+                  {tickerEarnings.quarterlyEarnings.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, color: "var(--t3)", marginBottom: 6 }}>EPS kasv kvartali kaupa (25% referentsjoon)</div>
+                      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 60 }}>
+                        {tickerEarnings.quarterlyEarnings.map((q, i) => (
+                          <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                            <div
+                              style={{
+                                height: `${Math.min(100, Math.max(0, (q.epsGrowth ?? 0) + 50))}%`,
+                                minHeight: 4,
+                                width: "100%",
+                                maxWidth: 24,
+                                backgroundColor: (q.epsGrowth ?? 0) >= 25 ? "var(--green)" : (q.epsGrowth ?? 0) >= 0 ? "var(--amber)" : "var(--red)",
+                                borderRadius: 2,
+                              }}
+                            />
+                            <div style={{ fontSize: 9, color: "var(--t3)", marginTop: 2 }}>{q.date?.slice(5) ?? ""}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 10, color: "var(--t3)" }}>
+                        <span>— 25%</span>
+                        <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                      </div>
+                    </div>
+                  )}
+                  {tickerEarnings.canslim && Object.keys(tickerEarnings.canslim).length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                      {["C", "A", "N", "S", "L", "I", "M"].map((k) => (
+                        <div key={k} style={{ display: "flex", gap: 8 }}>
+                          <span style={{ fontWeight: 800, color: "var(--t2)", minWidth: 16 }}>{k}</span>
+                          <span style={{ color: "var(--t1)" }}>{tickerEarnings.canslim[k] ?? "—"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="modal-card">
                 <div className="fund-grid">
                   {[
@@ -2453,12 +2532,16 @@ export default function Home() {
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ action: "analyze", ticker: selectedTicker }),
                         });
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
                         const ai = await res.json();
+                        if (!res.ok) {
+                          console.error("[AI analyze] HTTP error:", res.status, ai);
+                          throw new Error(ai?.error ?? `HTTP ${res.status}`);
+                        }
                         setAiAnalyze(ai as AiAnalyzeResponse);
                         if (typeof ai?.target === "number") setTargetDraft(ai.target);
                         if (typeof ai?.stop_loss === "number") setStopDraft(ai.stop_loss);
-                      } catch {
+                      } catch (e) {
+                        console.error("[AI analyze] Failed:", e);
                         setAiAnalyze(null);
                       } finally {
                         setAiAnalyzeLoading(false);
@@ -2561,10 +2644,15 @@ export default function Home() {
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ action: "chat", ticker: selectedTicker, message: msg }),
                           });
-                          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                          const ai = (await res.json()) as AiChatResponse;
-                          setChat((prev) => [...prev, { role: "ai", html: ai.replyHtml }]);
-                        } catch {
+                          const ai = (await res.json()) as AiChatResponse & { reply?: string; error?: string };
+                          if (!res.ok) {
+                            console.error("[Tees chat] HTTP error:", res.status, ai);
+                            throw new Error((ai as { error?: string }).error ?? `HTTP ${res.status}`);
+                          }
+                          const html = ai.replyHtml ?? ai.reply ?? "";
+                          setChat((prev) => [...prev, { role: "ai", html: html || "AI ei vastanud." }]);
+                        } catch (e) {
+                          console.error("[Tees chat] Failed:", e);
                           setChat((prev) => [...prev, { role: "ai", text: "AI vastus ebaõnnestus." }]);
                         }
                       })();

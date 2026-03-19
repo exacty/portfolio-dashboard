@@ -34,23 +34,7 @@ def _safe_scalar(ser: pd.Series, idx: int) -> float:
     return float(val.item()) if hasattr(val, "item") else float(val)
 
 
-FRONTEND_TICKERS: List[str] = [
-    "EQNR.OL",
-    "AKRBP.OL",
-    "AGNC",
-    "VZ",
-    "LGEN.L",
-    "INPP.L",
-    "HICL.L",
-    "TRIG.L",
-    "SEQI.L",
-    "MSFT",
-    "NOVO-B.CO",
-    "O",
-    "PYPL",
-    "ADBE",
-    "SEVN",
-]
+# All positions from portfolio_data.json are used; no ticker limit.
 
 CORR_FRONTEND_TICKERS: List[str] = ["TRIG", "SEQI", "HICL", "INPP", "SUPR", "LGEN"]
 
@@ -60,6 +44,39 @@ GBX_TO_EUR_DIVISOR = 100.0  # pence -> pounds
 # Data reconciliation metadata (used for explaining which source was chosen).
 # Output shape: { [ticker]: { chosenSource: str, lastMedian: float, candidates: [...] } }
 DATA_QUALITY: Dict[str, Any] = {}
+
+# Portfolio sector mapping for sidebar "Sektori jaotus"
+TICKER_TO_SECTOR: Dict[str, str] = {
+    "EQNR.OL": "Energia",
+    "AKRBP.OL": "Energia",
+    "OXY": "Energia",
+    "VZ": "Telecom",
+    "O": "USA REITid",
+    "VICI": "USA REITid",
+    "IIPR": "USA REITid",
+    "AGNC": "USA REITid",
+    "SEVN": "USA REITid",
+    "INPP.L": "UK Infrastr",
+    "SEQI.L": "UK Infrastr",
+    "HICL.L": "UK Infrastr",
+    "TRIG.L": "UK Infrastr",
+    "SUPR.L": "UK Infrastr",
+    "LGEN.L": "UK Finants",
+    "MSFT": "Tehnoloogia",
+    "ADBE": "Tehnoloogia",
+    "FIG": "Tehnoloogia",
+    "PYPL": "Fintech",
+    "NOVO-B.CO": "Tervishoid",
+    "TLT": "Võlakirjad",
+    "IS04.L": "Võlakirjad",
+    "ARCC": "BDC",
+    "UPM.HE": "Materjalid",
+    "A8X.F": "Tarbekaubad",
+    "IFN": "Arenevad turud",
+    "LEG": "Tööstus",
+}
+# Fallback for unmapped tickers
+DEFAULT_SECTOR = "Muu"
 
 SECTOR_ETFS: List[str] = [
     "XLK",
@@ -217,28 +234,55 @@ def _heuristic_score(ret_pct: float, rsi: float, div_yield_pct: float) -> float:
     return _clamp(base, 0.0, 100.0)
 
 
-def _make_signals(ret_pct: float, rsi: float, div_yield_pct: float) -> Tuple[List[str], List[str]]:
+def _sector_for_signals(tk: str) -> str:
+    """Sector name for signal logic (rate sensitivity)."""
+    return TICKER_TO_SECTOR.get(tk, DEFAULT_SECTOR)
+
+
+def _make_signals(
+    ret_pct: float,
+    rsi: float,
+    div_yield_pct: float,
+    price: float,
+    ma50: Optional[float],
+    pe: Optional[float],
+    tk: str,
+) -> Tuple[List[str], List[str]]:
     # UI expects 3 signals and signal types: p (green), n (red), w (amber), i (blue)
-    t1 = "p" if ret_pct >= 0 else "n"
-    s1 = f"Turg+ " if t1 == "p" else "Turg- "
-    s1 = s1.strip()
-
-    if rsi >= 60:
-        s2 = "Fund+"
-        t2 = "p"
-    elif rsi <= 45:
-        s2 = "Fund-"
-        t2 = "n"
+    # S1: Trend: "Turg+" if price > 50p MA, "Turg-" if below
+    if ma50 is not None and ma50 > 0:
+        t1 = "p" if price >= ma50 else "n"
+        s1 = "Turg+" if t1 == "p" else "Turg-"
     else:
-        s2 = "Rate?"
-        t2 = "w"
+        t1 = "p" if ret_pct >= 0 else "n"
+        s1 = "Turg+" if t1 == "p" else "Turg-"
 
-    if div_yield_pct >= 7:
-        s3 = "Div+"
-        t3 = "p"
+    # S2: Fundamentaalid: "Fund+" if P/E < 20 and reasonable, "Fund-" if P/E > 25
+    pe_val = _safe_float(pe) if pe is not None else None
+    if pe_val is not None and pe_val > 0:
+        if pe_val < 18:
+            s2, t2 = "Fund+", "p"
+        elif pe_val > 25:
+            s2, t2 = "Fund-", "n"
+        else:
+            s2, t2 = "Rate?", "w"
+    else:
+        s2 = "Fund+" if rsi >= 55 else ("Fund-" if rsi <= 45 else "Rate?")
+        t2 = "p" if s2 == "Fund+" else ("n" if s2 == "Fund-" else "w")
+
+    # S3: Div+/Mom+/Val?/Rate?
+    sector = _sector_for_signals(tk)
+    rate_sensitive = sector in ("UK Infrastr", "USA REITid", "Võlakirjad")
+    if div_yield_pct >= 5:
+        s3, t3 = "Div+", "p"
+    elif rsi >= 60 and ret_pct >= 10:
+        s3, t3 = "Mom+", "p"
+    elif pe_val is not None and pe_val > 25:
+        s3, t3 = "Val?", "w"
+    elif rate_sensitive:
+        s3, t3 = "Rate?", "w"
     elif div_yield_pct >= 3:
-        s3 = "Vol~"
-        t3 = "w"
+        s3, t3 = "Vol~", "w"
     else:
         s3 = "Val?"
         t3 = "i" if rsi < 50 else "n"
@@ -323,6 +367,7 @@ def _fetch_position_data_aggregator(tk: str, portfolio_positions: Dict[str, Any]
         ibkr_price = float(pos_data["market_price"])
 
     hist, hist_src = agg.get_history_with_source(tk, "1y")
+    price_already_normalized = (tk.endswith(".L") or tk in GBX_PENNY_TICKERS) and hist_src in ("yfinance", "yahoo_http")
     fund = agg.get_fundamentals(tk)
     price_res = agg.get_price(tk, ibkr_price=ibkr_price, ibkr_sync_age_hours=last_ibkr_sync_hours)
     earn_data, earn_src = agg.get_earnings_with_source(tk)
@@ -348,6 +393,7 @@ def _fetch_position_data_aggregator(tk: str, portfolio_positions: Dict[str, Any]
         "price_all_sources": price_res.get("all_sources", {}),
         "data_quality": dq,
         "fundamentals_quality": fund_quality,
+        "price_already_normalized": price_already_normalized,
     }
     return hist, info, price_res, data_sources
 
@@ -581,17 +627,12 @@ def _compute_position(
         price_raw = price_override if price_override and price_override > 0 else float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
         day_chg_pct = 0.0
         spark = [price_raw] * 8
-        ret_pct = 0.0
         rsi = 50.0
     else:
         price_raw = price_override if price_override and price_override > 0 else _safe_scalar(close, -1)
         prev = _safe_scalar(close, -2)
         day_chg_pct = ((price_raw - prev) / prev) * 100.0 if prev else 0.0
         spark = list(map(float, close.tail(8).tolist()))
-
-        lookback_idx = int(max(0, len(close) - 29))
-        base = _safe_scalar(close, lookback_idx) if lookback_idx < len(close) else _safe_scalar(close, 0)
-        ret_pct = ((price_raw - base) / base) * 100.0 if base else 0.0
 
         rsi = _compute_rsi14(close)
 
@@ -601,8 +642,19 @@ def _compute_position(
     shares = float(portfolio_positions.get(tk, {}).get("shares", 0.0))
     avg_price_raw = float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
 
-    # yfinance returns .L ticker prices in pence; portfolio_data from IBKR stores GBP in pounds
-    if cur == "GBP" and tk.endswith(".L") and len(close) >= 2:
+    # ret_pct = return vs avg_price (cost basis), not 29-day
+    price_already_normalized = (data_sources or {}).get("price_already_normalized", False)
+    if len(close) < 2 or price_already_normalized:
+        avg_for_ret = avg_price_raw  # both in pounds (override/portfolio)
+    elif cur == "GBP" and tk in GBX_PENNY_TICKERS:
+        avg_for_ret = avg_price_raw * 100.0  # portfolio stores pounds, yf close is pence
+    else:
+        avg_for_ret = avg_price_raw
+    ret_pct = ((price_raw - avg_for_ret) / avg_for_ret) * 100.0 if avg_for_ret else 0.0
+
+    # yfinance returns .L ticker prices in pence; DataAggregator may already normalize to pounds
+    price_already_normalized = (data_sources or {}).get("price_already_normalized", False)
+    if cur == "GBP" and tk.endswith(".L") and len(close) >= 2 and not price_already_normalized:
         price_raw = price_raw / 100.0
 
     # Div / valuations
@@ -614,11 +666,21 @@ def _compute_position(
     # Div yield: dividendYield, trailingAnnualDividendYield, dividendRate, or from dividends history
     div_yield_pct = _compute_div_yield(tk, price_raw, info)
 
+    ma50_val: Optional[float] = None
+    if len(close) >= 50:
+        ma50_val = float(close.tail(50).mean())
+    pe_val: Optional[float] = None
+    if trailing_pe is not None:
+        try:
+            pe_val = float(trailing_pe) if np.isfinite(float(trailing_pe)) else None
+        except (ValueError, TypeError):
+            pass
+
     eur_price = _to_eur_price(tk, price_raw, cur, fx_rates)
     avg_eur = _to_eur_price(tk, avg_price_raw, cur, fx_rates)
     # For table UI, we report current P&L later as KPIs; keep position fields for now.
     score = _heuristic_score(ret_pct, rsi, div_yield_pct)
-    sigs, sigT = _make_signals(ret_pct, rsi, div_yield_pct)
+    sigs, sigT = _make_signals(ret_pct, rsi, div_yield_pct, price_raw, ma50_val, pe_val, tk)
 
     name = _ticker_name(tk, info)
     rsi_ctx = _rsi_ctx(rsi)
@@ -899,6 +961,7 @@ def build_portfolio_json() -> Dict[str, Any]:
                     tickers_info[tk] = {}
 
         etf_hist = _download_history_batch(SECTOR_ETFS + ["^GSPC", "^TNX"], period="1y")
+        price_hist_3mo = _download_history_batch(["^GSPC", "^TNX"], period="3mo")
         for etf in SECTOR_ETFS + ["^GSPC", "^TNX"]:
             if etf not in price_hist_pos:
                 price_hist_pos[etf] = etf_hist.get(etf, pd.DataFrame())
@@ -976,7 +1039,7 @@ def build_portfolio_json() -> Dict[str, Any]:
         matrix_full.append(row)
 
     # Sector rotation (11 sector ETFs) — use batch 1y data
-    etf_hist_by_tk = {etf: price_hist_1y.get(etf, pd.DataFrame()) for etf in SECTOR_ETFS}
+    etf_hist_by_tk = {etf: price_hist_pos.get(etf, pd.DataFrame()) for etf in SECTOR_ETFS}
     sector_rotation: List[Dict[str, Any]] = []
     for etf in SECTOR_ETFS:
         metrics = _compute_sector_metrics(etf_hist_by_tk.get(etf, pd.DataFrame()))
@@ -997,32 +1060,38 @@ def build_portfolio_json() -> Dict[str, Any]:
             }
         )
 
-    # Sidebar "Sektori jaotus" bars: derive a pseudo-allocation from |YTD| and phase.
-    # Keep it deterministic and stable for the UI.
-    weights = [abs(s["ytd"]) + max(0.0, s["mom_1m"]) / 2.0 for s in sector_rotation]
-    w_sum = sum(weights)
-    if w_sum <= 0:
-        weights = [1.0] * len(sector_rotation)
-        w_sum = float(len(sector_rotation))
-
-    phase_color = {
-        "Juht": "var(--teal)",
-        "Taastumine": "var(--purple)",
-        "Nõrgenemine": "var(--amber)",
-        "Mahajääja": "var(--red)",
+    # Sidebar "Sektori jaotus": portfolio position EUR values grouped by sector
+    sector_eur: Dict[str, float] = {}
+    for p in positions:
+        sec = TICKER_TO_SECTOR.get(p["tk"], DEFAULT_SECTOR)
+        val = p["eur_price"] * p["shares"]
+        sector_eur[sec] = sector_eur.get(sec, 0.0) + val
+    total_sector = sum(sector_eur.values()) or 1.0
+    sector_colors = {
+        "Energia": "var(--amber)",
+        "USA REITid": "var(--purple)",
+        "UK Infrastr": "var(--teal)",
+        "UK Finants": "var(--blue)",
+        "Tehnoloogia": "var(--green)",
+        "Fintech": "var(--cyan)",
+        "Tervishoid": "var(--green)",
+        "Võlakirjad": "var(--t3)",
+        "BDC": "var(--purple)",
+        "Telecom": "var(--blue)",
+        "Materjalid": "var(--amber)",
+        "Tarbekaubad": "var(--teal)",
+        "Arenevad turud": "var(--green)",
+        "Tööstus": "var(--t3)",
+        "Muu": "var(--t3)",
     }
-
     sector_allocation = []
-    # Show top 8 by weight to match the existing layout density
-    sorted_sec = sorted(sector_rotation, key=lambda s: weights[sector_rotation.index(s)], reverse=True)
-    for idx, s in enumerate(sorted_sec[:8]):
-        w = abs(s["ytd"]) + max(0.0, s["mom_1m"]) / 2.0
-        pct = (w / w_sum) * 100.0 if w_sum else 0.0
+    for sec, eur_val in sorted(sector_eur.items(), key=lambda x: -x[1]):
+        pct = (eur_val / total_sector) * 100.0
         sector_allocation.append(
             {
-                "name": s["ticker"],
-                "pct": float(pct),
-                "color": phase_color.get(s["phase"], "var(--t3)"),
+                "name": sec,
+                "pct": round(float(pct), 1),
+                "color": sector_colors.get(sec, "var(--t3)"),
             }
         )
 

@@ -255,9 +255,10 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json()) as {
-      action: "scan" | "analyze" | "chat" | "portfolio_chat";
+      action: "scan" | "analyze" | "chat" | "portfolio_chat" | "news_analysis";
       ticker?: string;
       message?: string;
+      news?: string[];
     };
 
     const anthropic = new Anthropic({ apiKey });
@@ -376,9 +377,47 @@ export async function POST(req: Request) {
       const text = completion.content?.[0]?.type === "text" ? completion.content[0].text : "";
       const parsed = extractJson(text);
       if (!parsed) {
-        return NextResponse.json({ error: "AI returned non-JSON", raw: text }, { status: 500 });
+        return NextResponse.json({
+          ticker,
+          signal: "HOIA",
+          score: 50,
+          target: 0,
+          stop_loss: 0,
+          sigs: [],
+          sigT: ["w", "w", "w"],
+          rationaleHtml: `<p>${text || "AI ei tagastanud struktureeritud vastust."}</p>`,
+        });
       }
       return NextResponse.json(parsed);
+    }
+
+    if (body.action === "news_analysis") {
+      if (!body.ticker) {
+        return NextResponse.json({ error: "Missing ticker" }, { status: 400 });
+      }
+      const newsItems = Array.isArray(body.news) ? body.news : [];
+      const userMsg =
+        `Analüüsi need uudised aktsia ${body.ticker} kohta ja anna soovitusi. Anna vastus JSON formaadis:\n` +
+        '{"summary":"lühikokkuvõte","sentiment":"bull|bear|neutral","impact":"high|medium|low","recommendation":"soovitus"}\n\nUudised:\n' +
+        newsItems.map((n, i) => `${i + 1}. ${n}`).join("\n");
+
+      const completion = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 800,
+        temperature: 0.3,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userMsg }],
+      });
+
+      const text = completion.content?.[0]?.type === "text" ? completion.content[0].text : "";
+      const parsed = extractJson(text);
+      const result = parsed ?? {
+        summary: text.slice(0, 300),
+        sentiment: "neutral",
+        impact: "unknown",
+        recommendation: text,
+      };
+      return NextResponse.json(result);
     }
 
     if (body.action === "chat") {
@@ -417,7 +456,7 @@ export async function POST(req: Request) {
       const text = completion.content?.[0]?.type === "text" ? completion.content[0].text : "";
       const parsed = extractJson(text);
       if (!parsed) {
-        return NextResponse.json({ error: "AI returned non-JSON", raw: text }, { status: 500 });
+        return NextResponse.json({ replyHtml: text || "AI ei tagastanud vastust." });
       }
       return NextResponse.json(parsed);
     }
