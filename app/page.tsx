@@ -846,6 +846,8 @@ export default function Home() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [scoreDir, setScoreDir] = useState<SortDir>("desc");
   const [scanLabel, setScanLabel] = useState("⟳ Skaneeri");
+  const [ibkrSyncLabel, setIbkrSyncLabel] = useState("🔄 IBKR Sync");
+  const [ibkrSyncResult, setIbkrSyncResult] = useState<{ synced: boolean; positions?: string[]; changes?: string[]; message?: string; error?: string } | null>(null);
 
   const [portfolioData, setPortfolioData] = useState<PortfolioResponse>(() => ({
     generatedAt: undefined,
@@ -1007,6 +1009,23 @@ export default function Home() {
     })();
     return () => window.clearInterval(id);
   }, [fetchPortfolio]);
+
+  const handleIbkrSync = async () => {
+    setIbkrSyncLabel("Sünkroonin IBKR-iga...");
+    setIbkrSyncResult(null);
+    try {
+      const res = await fetch("/api/ibkr-sync");
+      const data = (await res.json()) as { synced: boolean; positions?: string[]; changes?: string[]; message?: string; error?: string };
+      setIbkrSyncResult(data);
+      if (data.synced) {
+        void fetchPortfolio();
+      }
+    } catch (e) {
+      setIbkrSyncResult({ synced: false, error: String(e) });
+    } finally {
+      setIbkrSyncLabel("🔄 IBKR Sync");
+    }
+  };
 
   const handleScan = async (message?: string) => {
     setScanLabel("⟳ Skaneerib...");
@@ -1262,6 +1281,24 @@ export default function Home() {
               <div className="btn primary" onClick={() => void handleScan()} role="button" tabIndex={0}>
                 {scanLabel}
               </div>
+              <div className="btn" onClick={() => void handleIbkrSync()} role="button" tabIndex={0}>
+                {ibkrSyncLabel}
+              </div>
+              {ibkrSyncResult ? (
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: ibkrSyncResult.synced ? "var(--green)" : "var(--red)",
+                    fontFamily: "var(--font-mono)",
+                    maxWidth: 200,
+                  }}
+                  title={ibkrSyncResult.changes?.join("\n") ?? ibkrSyncResult.message}
+                >
+                  {ibkrSyncResult.synced
+                    ? `${ibkrSyncResult.positions?.length ?? 0} positsiooni sünkroonitud`
+                    : ibkrSyncResult.error ?? "Viga"}
+                </div>
+              ) : null}
               <div className="btn" onClick={handleToggleView} role="button" tabIndex={0}>
                 ◫ Vaade
               </div>
