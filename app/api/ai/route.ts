@@ -39,9 +39,13 @@ async function getPortfolioCached(): Promise<PortfolioJson> {
     cachedPortfolio = { fetchedAt: now, data };
     return data;
   } catch {
-    const data = await runPortfolioEngine();
-    cachedPortfolio = { fetchedAt: now, data };
-    return data;
+    try {
+      const data = await runPortfolioEngine();
+      cachedPortfolio = { fetchedAt: now, data };
+      return data;
+    } catch {
+      return {};
+    }
   }
 }
 
@@ -56,12 +60,14 @@ async function readPortfolioData(): Promise<Record<string, unknown>> {
 }
 
 function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<string, unknown>): string {
-  const parts: string[] = [];
+  try {
+    const parts: string[] = [];
+    const port = portfolio ?? {};
 
-  parts.push("## Portfelli kontekst (ALATI kasuta seda)");
-  parts.push("");
+    parts.push("## Portfelli kontekst (ALATI kasuta seda)");
+    parts.push("");
 
-  const kpis = portfolio.kpis as Record<string, unknown> | undefined;
+    const kpis = port.kpis as Record<string, unknown> | undefined;
   if (kpis) {
     parts.push("### KPI-d");
     parts.push(`- Portfell kokku: €${Number(kpis.portfolioTotal ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}`);
@@ -72,7 +78,7 @@ function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<s
     parts.push("");
   }
 
-  const positions = Array.isArray(portfolio.positions) ? portfolio.positions : [];
+    const positions = Array.isArray(port.positions) ? port.positions : [];
   if (positions.length) {
     parts.push("### Positsioonid");
     for (const p of positions as Array<Record<string, unknown>>) {
@@ -104,7 +110,7 @@ function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<s
     parts.push("");
   }
 
-  const sectors = Array.isArray(portfolio.sectors_allocation) ? portfolio.sectors_allocation : [];
+    const sectors = Array.isArray(port.sectors_allocation) ? port.sectors_allocation : [];
   if (sectors.length) {
     parts.push("### Sektori jaotus");
     for (const s of sectors as Array<{ name: string; pct: number }>) {
@@ -113,7 +119,7 @@ function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<s
     parts.push("");
   }
 
-  const rotation = Array.isArray(portfolio.sectors_rotation) ? portfolio.sectors_rotation : [];
+    const rotation = Array.isArray(port.sectors_rotation) ? port.sectors_rotation : [];
   if (rotation.length) {
     parts.push("### Sektori rotatsioon (faasid)");
     for (const r of rotation as Array<{ ticker: string; phase?: string; ytd?: number }>) {
@@ -122,7 +128,7 @@ function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<s
     parts.push("");
   }
 
-  const macro = portfolio.macro as { items?: Array<{ label: string; value: string; chgText?: string }> } | undefined;
+    const macro = port.macro as { items?: Array<{ label: string; value: string; chgText?: string }> } | undefined;
   if (macro?.items?.length) {
     parts.push("### Makro");
     for (const m of macro.items) {
@@ -131,7 +137,7 @@ function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<s
     parts.push("");
   }
 
-  const news = Array.isArray(portfolio.news) ? portfolio.news : [];
+    const news = Array.isArray(port.news) ? port.news : [];
   if (news.length) {
     parts.push("### Viimased uudised");
     for (const n of (news.slice(0, 8) as Array<{ time?: string; headline?: string; tag?: string }>)) {
@@ -140,13 +146,17 @@ function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<s
     parts.push("");
   }
 
-  const correlation = portfolio.correlation as { tickers?: string[] } | undefined;
-  if (correlation?.tickers?.length) {
-    parts.push(`### Korrelatsioon (${correlation.tickers.length} tickerit)`);
-    parts.push("");
-  }
+    const correlation = port.correlation as { tickers?: string[] } | undefined;
+    if (correlation?.tickers?.length) {
+      parts.push(`### Korrelatsioon (${correlation.tickers.length} tickerit)`);
+      parts.push("");
+    }
 
-  return parts.join("\n");
+    return parts.join("\n");
+  } catch (err) {
+    console.error("buildPortfolioContext error:", err);
+    return "## Portfelli kontekst\n\n(Portfelli andmed puuduvad või vigased)";
+  }
 }
 
 function extractJson(text: string): JsonObject | null {
@@ -236,6 +246,7 @@ const MODEL = "claude-sonnet-4-20250514";
 export async function POST(req: Request) {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
+    console.log("API key exists:", !!apiKey);
     if (!apiKey) {
       return NextResponse.json(
         { error: "Missing ANTHROPIC_API_KEY" },
@@ -412,10 +423,9 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
-  } catch (e) {
-    return NextResponse.json(
-      { error: "AI request failed", detail: String(e) },
-      { status: 500 }
-    );
+  } catch (error) {
+    console.error("AI API error:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
