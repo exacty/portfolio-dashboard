@@ -1,0 +1,235 @@
+{
+  "positions": {
+    "EQNR.OL": {
+      "avg_price": 250.33,
+      "shares": 1000,
+      "currency": "NOK",
+      "tees": "Tugev energiaettevõte, hea dividend",
+      "target": 360,
+      "stop_loss": 200
+    },
+    "AKRBP.OL": {
+      "avg_price": 248.67,
+      "shares": 1200,
+      "currency": "NOK",
+      "tees": "Aker BP - Norra nafta, kõrge dividend.",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "VZ": {
+      "avg_price": 41.783,
+      "shares": 2600,
+      "currency": "USD",
+      "tees": "Verizon - stabiilne telecom dividend",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "O": {
+      "avg_price": 55.282,
+      "shares": 2100,
+      "currency": "USD",
+      "tees": "Realty Income - igakuine dividend REIT",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "UPM.HE": {
+      "avg_price": 22.644,
+      "shares": 3000,
+      "currency": "EUR",
+      "tees": "UPM-Kymmene metsatööstus",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "AGNC": {
+      "avg_price": 9.536,
+      "shares": 10785,
+      "currency": "USD",
+      "tees": "Mortgage REIT, kõrge dividend",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "INPP.L": {
+      "avg_price": 127.07,
+      "shares": 79000,
+      "currency": "GBP",
+      "tees": "UK infrastruktuur, stabiilne dividend",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "SEQI.L": {
+      "avg_price": 78.25,
+      "shares": 128000,
+      "currency": "GBP",
+      "tees": "Sequoia infra dividend",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "HICL.L": {
+      "avg_price": 118.66,
+      "shares": 94000,
+      "currency": "GBP",
+      "tees": "HICL UK infrastruktuur",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "A8X.F": {
+      "avg_price": 12.321,
+      "shares": 3901,
+      "currency": "EUR",
+      "tees": "Fiskars tarbekaup",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "SUPR.L": {
+      "avg_price": 84.22,
+      "shares": 180000,
+      "currency": "GBP",
+      "tees": "UK toidupoe REIT",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "OXY": {
+      "avg_price": 79.944,
+      "shares": 25,
+      "currency": "USD",
+      "tees": "Buffett positsioon, nafta",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "NOVO-B.CO": {
+      "avg_price": 249.395,
+      "shares": 2500,
+      "currency": "DKK",
+      "tees": "Novo Nordisk Ozempic kasv",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "VICI": {
+      "avg_price": 29.202,
+      "shares": 4000,
+      "currency": "USD",
+      "tees": "Casino REIT",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "TRIG.L": {
+      "avg_price": 69.41,
+      "shares": 120000,
+      "currency": "GBP",
+      "tees": "Taastuvenergia UK",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "LGEN.L": {
+      "avg_price": 259.46,
+      "shares": 49000,
+      "currency": "GBP",
+      "tees": "UK kindlustus, kõrge dividend",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "MSFT": {
+      "avg_price": 419.753,
+      "shares": 300,
+      "currency": "USD",
+      "tees": "Azure + AI kasv",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "TLT": {
+      "avg_price": 98.362,
+      "shares": 600,
+      "currency": "USD",
+      "tees": "Intresside languse mäng",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "IS04.L": {
+      "avg_price": 3.18522,
+      "shares": 25000,
+      "currency": "GBP",
+      "tees": "Pikaajalised USA riigivõlakirjad",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "IFN": {
+      "avg_price": 13.735,
+      "shares": 4377,
+      "currency": "USD",
+      "tees": "India kasvuturg",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "ARCC": {
+      "avg_price": 21.426,
+      "shares": 2400,
+      "currency": "USD",
+      "tees": "Suurim BDC, kõrge dividend",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "IIPR": {
+      "avg_price": 64.327,
+      "shares": 1566,
+      "currency": "USD",
+      "tees": "Cannabis REIT",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "FIG": {
+      "avg_price": 34.197,
+      "shares": 2000,
+      "currency": "USD",
+      "tees": "Figma design tarkvara",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "ADBE": {
+      "avg_price": 363.661,
+      "shares": 150,
+      "currency": "USD",
+      "tees": "Adobe creative monopol",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "PYPL": {
+      "avg_price": 73.35,
+      "shares": 1600,
+      "currency": "USD",
+      "tees": "Fintech turnaround",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "SEVN": {
+      "avg_price": 13.833,
+      "shares": 8130,
+      "currency": "USD",
+      "tees": "Kõrge dividend mREIT",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "LEG": {
+      "avg_price": 18.726,
+      "shares": 4100,
+      "currency": "USD",
+      "tees": "Restruktureerimine",
+      "target": 0,
+      "stop_loss": 0
+    },
+    "TIRXF": {
+      "avg_price": 0.11226,
+      "shares": 110000,
+      "currency": "USD",
+      "tees": "Spekulatiivne",
+      "target": 0,
+      "stop_loss": 0
+    }
+  },
+  "fx_rates": {
+    "NOK": 0.087,
+    "DKK": 0.134,
+    "GBP": 1.17,
+    "USD": 0.92,
+    "EUR": 1
+  }
+}

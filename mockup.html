@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="et">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portfolio Command Center</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080d;--bg2:#0b0e16;--bg3:#10141f;--bg4:#161b2a;--bg5:#1c2235;
+  --border:#1a1f32;--border2:#252b42;
+  --t1:#e8e6df;--t2:#9a98a0;--t3:#5c5a66;--t4:#3a3844;
+  --green:#00d68f;--green2:#00b377;--green-bg:rgba(0,214,143,0.06);--green-border:rgba(0,214,143,0.15);
+  --red:#ff4757;--red2:#e63e4f;--red-bg:rgba(255,71,87,0.06);--red-border:rgba(255,71,87,0.15);
+  --amber:#ffb830;--amber-bg:rgba(255,184,48,0.06);--amber-border:rgba(255,184,48,0.15);
+  --blue:#4d8dff;--blue2:#3672db;--blue-bg:rgba(77,141,255,0.06);
+  --purple:#8b5cf6;--purple-bg:rgba(139,92,246,0.06);
+  --teal:#14b8a6;--cyan:#06b6d4;
+  --font-display:'Outfit',sans-serif;--font-mono:'JetBrains Mono',monospace;
+  --radius:8px;--radius-lg:12px;--radius-xl:16px;
+}
+html,body{font-family:var(--font-display);background:var(--bg);color:var(--t1);font-size:13px;line-height:1.5;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+::selection{background:rgba(77,141,255,0.3)}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* LAYOUT */
+.app{display:grid;grid-template-columns:1fr;grid-template-rows:auto auto 1fr;height:100vh;overflow:hidden}
+.header{padding:12px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg2)}
+.header h1{font-size:15px;font-weight:600;letter-spacing:-0.3px;display:flex;align-items:center;gap:8px}
+.header h1 .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(0,214,143,0.4)}50%{opacity:0.8;box-shadow:0 0 0 6px rgba(0,214,143,0)}}
+.header .meta{font-size:11px;color:var(--t3);font-family:var(--font-mono)}
+.header-actions{display:flex;gap:6px}
+
+/* BUTTONS */
+.btn{padding:5px 12px;border-radius:6px;font-size:11px;font-weight:500;border:1px solid var(--border);background:var(--bg3);color:var(--t2);cursor:pointer;transition:all 0.12s;font-family:var(--font-display);white-space:nowrap}
+.btn:hover{background:var(--bg4);color:var(--t1);border-color:var(--border2)}
+.btn.primary{background:var(--green-bg);border-color:var(--green-border);color:var(--green)}
+.btn.primary:hover{background:rgba(0,214,143,0.12)}
+.btn.danger{background:var(--red-bg);border-color:var(--red-border);color:var(--red)}
+.btn.danger:hover{background:rgba(255,71,87,0.12)}
+.btn.amber{background:var(--amber-bg);border-color:var(--amber-border);color:var(--amber)}
+.btn.sm{padding:3px 8px;font-size:10px}
+
+/* KPI ROW */
+.kpi-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}
+.kpi{background:var(--bg2);padding:12px 16px;position:relative;overflow:hidden}
+.kpi::after{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.kpi.green::after{background:linear-gradient(90deg,var(--green),transparent)}
+.kpi.red::after{background:linear-gradient(90deg,var(--red),transparent)}
+.kpi.blue::after{background:linear-gradient(90deg,var(--blue),transparent)}
+.kpi.amber::after{background:linear-gradient(90deg,var(--amber),transparent)}
+.kpi .label{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--t3);margin-bottom:4px;font-weight:500}
+.kpi .val{font-size:20px;font-weight:700;letter-spacing:-0.8px;font-family:var(--font-mono)}
+.kpi .sub{font-size:10px;color:var(--t2);margin-top:2px;font-family:var(--font-mono)}
+
+/* MAIN GRID */
+.main{display:grid;grid-template-columns:1fr 340px;overflow:hidden}
+.main-content{overflow-y:auto;padding:0}
+.sidebar-right{border-left:1px solid var(--border);overflow-y:auto;background:var(--bg2)}
+
+/* ALERTS */
+.alerts{padding:12px 20px;display:flex;flex-direction:column;gap:4px}
+.alert{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:var(--radius);font-size:11px;cursor:pointer;transition:all 0.15s}
+.alert:hover{filter:brightness(1.2)}
+.alert.critical{background:var(--red-bg);border:1px solid var(--red-border)}
+.alert.warning{background:var(--amber-bg);border:1px solid var(--amber-border)}
+.alert.success{background:var(--green-bg);border:1px solid var(--green-border)}
+.alert .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;animation:pulse 2s infinite}
+.alert.critical .dot{background:var(--red)}
+.alert.warning .dot{background:var(--amber)}
+.alert.success .dot{background:var(--green)}
+.alert .ticker-badge{font-weight:700;font-family:var(--font-mono);font-size:11px;padding:1px 6px;border-radius:3px;background:rgba(255,255,255,0.05)}
+.alert .action-btn{margin-left:auto;flex-shrink:0}
+
+/* TABLE */
+.table-wrap{padding:0 20px 20px}
+.section-head{display:flex;justify-content:space-between;align-items:center;padding:12px 20px 8px;position:sticky;top:0;background:var(--bg);z-index:10}
+.section-head h2{font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:var(--t3);font-weight:500}
+.filters{display:flex;gap:4px}
+.filter-btn{padding:3px 10px;border-radius:4px;font-size:10px;font-weight:500;border:none;background:transparent;color:var(--t3);cursor:pointer;font-family:var(--font-display)}
+.filter-btn.active{background:var(--bg4);color:var(--t1)}
+.filter-btn:hover{color:var(--t2)}
+
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+thead{position:sticky;top:40px;z-index:5}
+thead th{font-size:9px;text-transform:uppercase;letter-spacing:0.8px;color:var(--t4);padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);background:var(--bg);font-weight:500;white-space:nowrap}
+tbody td{padding:8px;border-bottom:1px solid rgba(26,31,50,0.5);vertical-align:middle}
+tbody tr{cursor:pointer;transition:background 0.1s}
+tbody tr:hover{background:rgba(255,255,255,0.012)}
+tbody tr.flagged{background:rgba(255,71,87,0.02)}
+tbody tr.flagged:hover{background:rgba(255,71,87,0.04)}
+
+.cell-ticker{width:140px}
+.cell-mkt{width:36px}
+.cell-price{width:90px}
+.cell-pos{width:85px}
+.cell-ret{width:60px}
+.cell-score{width:44px}
+.cell-signals{width:100px}
+.cell-chart{width:72px}
+.cell-rsi{width:70px}
+.cell-val{width:80px}
+.cell-div{width:60px}
+
+.tk{font-weight:700;font-size:13px;letter-spacing:-0.3px;font-family:var(--font-mono)}
+.tk-name{font-size:10px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.mkt-tag{display:inline-block;padding:2px 5px;border-radius:3px;font-size:9px;font-weight:600;letter-spacing:0.4px}
+.mkt-tag.no{background:rgba(255,71,87,0.1);color:#fca5a5}
+.mkt-tag.us{background:rgba(139,92,246,0.1);color:#c4b5fd}
+.mkt-tag.uk{background:rgba(20,184,166,0.1);color:#5eead4}
+.mkt-tag.eu{background:rgba(77,141,255,0.1);color:#93c5fd}
+.mkt-tag.dk{background:rgba(255,184,48,0.1);color:#fcd34d}
+.mkt-tag.etf{background:rgba(100,100,120,0.1);color:#a0a0b0}
+.price-main{font-weight:500;font-family:var(--font-mono);font-size:12px}
+.chg{font-size:11px;font-weight:600;font-family:var(--font-mono)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.eur-val{font-weight:600;font-family:var(--font-mono);font-size:12px}
+.pct-port{font-size:10px;color:var(--t3);font-family:var(--font-mono)}
+
+/* SCORE RING */
+.score{width:36px;height:36px;position:relative}
+.score svg{transform:rotate(-90deg)}
+.score .val{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:var(--font-mono)}
+
+/* SIGNAL TAGS */
+.sigs{display:flex;gap:2px;flex-wrap:wrap}
+.sig{font-size:8px;padding:2px 4px;border-radius:2px;font-weight:600;letter-spacing:0.3px;font-family:var(--font-mono)}
+.sig.p{background:rgba(0,214,143,0.1);color:var(--green)}
+.sig.n{background:rgba(255,71,87,0.1);color:var(--red)}
+.sig.w{background:rgba(255,184,48,0.1);color:var(--amber)}
+.sig.i{background:rgba(77,141,255,0.1);color:var(--blue)}
+
+/* MINI SPARKLINE */
+.spark{height:24px;display:flex;align-items:end;gap:1px}
+.spark-bar{width:3px;border-radius:1px 1px 0 0;transition:height 0.3s}
+
+/* RSI */
+.rsi-wrap{display:flex;flex-direction:column;gap:2px}
+.rsi-num{font-family:var(--font-mono);font-size:11px;font-weight:500}
+.rsi-track{width:100%;height:3px;background:var(--bg);border-radius:2px;overflow:hidden}
+.rsi-fill{height:100%;border-radius:2px;transition:width 0.5s}
+.rsi-ctx{font-size:9px;color:var(--t3)}
+
+/* VALUATION PILLS */
+.vpills{display:flex;gap:3px;flex-wrap:wrap}
+.vpill{font-size:9px;padding:2px 5px;border-radius:3px;background:rgba(255,255,255,0.03);color:var(--t2);font-family:var(--font-mono);white-space:nowrap}
+
+/* RIGHT SIDEBAR */
+.sb-section{padding:14px 16px;border-bottom:1px solid var(--border)}
+.sb-title{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--t3);font-weight:500;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.sb-title .live{font-size:8px;color:var(--green);text-transform:none;letter-spacing:0;font-weight:400;display:flex;align-items:center;gap:4px}
+.sb-title .live::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+
+/* MACRO */
+.macro-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.macro-item{background:var(--bg3);border-radius:6px;padding:8px 10px}
+.macro-item .mi-label{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:0.5px}
+.macro-item .mi-val{font-size:16px;font-weight:700;font-family:var(--font-mono);margin-top:2px}
+.macro-item .mi-chg{font-size:10px;font-family:var(--font-mono);margin-top:1px}
+.macro-item .mi-bar{height:2px;border-radius:1px;margin-top:4px;background:var(--bg5);overflow:hidden}
+.macro-item .mi-bar-fill{height:100%;border-radius:1px}
+
+/* SECTOR ALLOCATION */
+.alloc-bars{display:flex;flex-direction:column;gap:4px}
+.alloc-row{display:flex;align-items:center;gap:8px;font-size:11px}
+.alloc-label{width:80px;color:var(--t2);font-size:10px;text-align:right;flex-shrink:0}
+.alloc-track{flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden}
+.alloc-fill{height:100%;border-radius:3px;transition:width 0.8s}
+.alloc-pct{width:32px;font-family:var(--font-mono);font-size:10px;color:var(--t2)}
+
+/* AI ADVISOR */
+.advisor{background:var(--bg3);border-radius:var(--radius);padding:12px;border:1px solid var(--border)}
+.advisor-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.advisor-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--blue),var(--purple));display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.advisor-name{font-size:12px;font-weight:600}
+.advisor-role{font-size:9px;color:var(--t3)}
+.advisor-msg{font-size:11px;line-height:1.6;color:var(--t2);margin-bottom:10px}
+.advisor-msg strong{color:var(--t1)}
+.advisor-actions{display:flex;gap:4px;flex-wrap:wrap}
+
+/* NEWS FEED */
+.news-item{padding:8px 0;border-bottom:1px solid rgba(26,31,50,0.4)}
+.news-item:last-child{border:none}
+.news-time{font-size:9px;color:var(--t4);font-family:var(--font-mono)}
+.news-headline{font-size:11px;color:var(--t2);margin-top:2px;line-height:1.4}
+.news-headline strong{color:var(--t1)}
+.news-impact{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:600;margin-top:3px;padding:1px 5px;border-radius:3px}
+.news-impact.bull{background:var(--green-bg);color:var(--green)}
+.news-impact.bear{background:var(--red-bg);color:var(--red)}
+.news-impact.neutral{background:rgba(255,255,255,0.03);color:var(--t3)}
+
+/* CORRELATION HEATMAP */
+.corr-grid{display:grid;gap:1px;font-family:var(--font-mono);font-size:8px}
+.corr-cell{display:flex;align-items:center;justify-content:center;aspect-ratio:1;border-radius:2px;font-weight:500;transition:transform 0.1s}
+.corr-cell:hover{transform:scale(1.3);z-index:2}
+.corr-label{display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--t3);font-weight:500}
+
+/* RISK METER */
+.risk-meter{display:flex;align-items:center;gap:8px;margin:6px 0}
+.rm-track{flex:1;height:8px;border-radius:4px;background:linear-gradient(90deg,var(--green),var(--amber),var(--red));position:relative}
+.rm-needle{width:3px;height:14px;background:var(--t1);border-radius:2px;position:absolute;top:-3px;transition:left 0.5s}
+.rm-labels{display:flex;justify-content:space-between;font-size:9px;color:var(--t3)}
+
+/* TEES DETAIL */
+.tees-card{background:var(--bg3);border-radius:var(--radius);padding:12px;border:1px solid var(--border);margin-top:8px}
+.tees-card h3{font-size:12px;font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between}
+.tees-row{display:flex;gap:12px;margin-bottom:8px}
+.tees-field{flex:1}
+.tees-field .tf-label{font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--t3);margin-bottom:3px}
+.tees-field .tf-val{font-size:11px;line-height:1.4}
+.tees-break{border-top:1px solid var(--border);padding-top:8px;margin-top:8px}
+.tees-break .tb-label{font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--red);margin-bottom:3px}
+.tees-break .tb-val{font-size:11px;color:var(--t2);line-height:1.4}
+
+/* ANIMATIONS */
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+.fade-in{animation:fadeIn 0.4s ease-out forwards}
+.alert{animation:slideIn 0.3s ease-out forwards}
+tbody tr{animation:fadeIn 0.3s ease-out forwards}
+tbody tr:nth-child(1){animation-delay:0.02s}
+tbody tr:nth-child(2){animation-delay:0.04s}
+tbody tr:nth-child(3){animation-delay:0.06s}
+tbody tr:nth-child(4){animation-delay:0.08s}
+tbody tr:nth-child(5){animation-delay:0.1s}
+tbody tr:nth-child(6){animation-delay:0.12s}
+tbody tr:nth-child(7){animation-delay:0.14s}
+tbody tr:nth-child(8){animation-delay:0.16s}
+tbody tr:nth-child(9){animation-delay:0.18s}
+tbody tr:nth-child(10){animation-delay:0.2s}
+tbody tr:nth-child(n+11){animation-delay:0.22s}
+
+/* RESPONSIVE */
+@media(max-width:1100px){.main{grid-template-columns:1fr}.sidebar-right{display:none}.kpi-strip{grid-template-columns:repeat(4,1fr)}}
+</style>
+<div class="app">
+  <!-- HEADER -->
+  <div class="header">
+    <h1><div class="pulse"></div>Portfolio Command Center<span style="font-size:10px;color:var(--t3);font-weight:400;margin-left:8px">IBKR U16376652</span></h1>
+    <div style="display:flex;align-items:center;gap:16px">
+      <div class="meta">18.03.2026 18:42 CET · Järgmine skan: 19:00</div>
+      <div class="header-actions">
+        <div class="btn primary" onclick="runScan()">⟳ Skaneeri</div>
+        <div class="btn" onclick="toggleView()">◫ Vaade</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- KPI STRIP -->
+  <div class="kpi-strip">
+    <div class="kpi blue">
+      <div class="label">Portfell</div>
+      <div class="val" style="color:var(--t1)">€1,187,420</div>
+      <div class="sub"><span class="pos">+€14,230</span> · +1.21% täna</div>
+    </div>
+    <div class="kpi red">
+      <div class="label">Unrealized P&L</div>
+      <div class="val" style="color:var(--red)">-€183,039</div>
+      <div class="sub">-13.4% · kostbasis €1,370K</div>
+    </div>
+    <div class="kpi green">
+      <div class="label">Div. tootlus (TTM)</div>
+      <div class="val" style="color:var(--green)">5.8%</div>
+      <div class="sub">€68,870/a · €5,739/kuu</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Portfelli beta</div>
+      <div class="val">0.74</div>
+      <div class="sub">Madalam turu vol · drawdown -22%</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Sharpe ratio</div>
+      <div class="val">0.42</div>
+      <div class="sub">Sortino 0.58 · risk-adj nõrk</div>
+    </div>
+    <div class="kpi amber">
+      <div class="label">Kontsentratsioon</div>
+      <div class="val" style="color:var(--amber)">28.4%</div>
+      <div class="sub">UK infra klaster · max 20% soov</div>
+    </div>
+    <div class="kpi red">
+      <div class="label">Tähelepanu</div>
+      <div class="val" style="color:var(--red)">5</div>
+      <div class="sub">2 müü · 1 stop · 2 ülevaata</div>
+    </div>
+  </div>
+
+  <!-- MAIN AREA -->
+  <div class="main">
+    <!-- LEFT: ALERTS + TABLE -->
+    <div class="main-content">
+      <!-- ALERTS -->
+      <div class="alerts">
+        <div class="alert critical">
+          <div class="dot"></div>
+          <span class="ticker-badge">PYPL</span>
+          <span>Skoor 87→31. Tees katkeb: fintech turnaround ei realiseeru, konkurents Stripe/Block. <strong>AI: MÜÜ.</strong></span>
+          <div class="btn danger sm action-btn">Kinnita müük</div>
+        </div>
+        <div class="alert critical">
+          <div class="dot"></div>
+          <span class="ticker-badge">SEVN</span>
+          <span>Alla stop-lossi. Div yield 14.2% ebajätkusuutlik, payout >100%. <strong>AI: MÜÜ.</strong></span>
+          <div class="btn danger sm action-btn">Kinnita müük</div>
+        </div>
+        <div class="alert critical">
+          <div class="dot"></div>
+          <span class="ticker-badge">ADBE</span>
+          <span>-30% avg-st. AI genereerimine kannibaliseerib Creative Cloud. Skoor 28. <strong>AI: MÜÜ/vaheta.</strong></span>
+          <div class="btn danger sm action-btn">Analüüsi</div>
+        </div>
+        <div class="alert success">
+          <div class="dot"></div>
+          <span class="ticker-badge">EQNR</span>
+          <span>Target 360 NOK saavutatud! +41.9% tootlus. <strong>AI: realiseeri 50% kasumit, tõsta stop.</strong></span>
+          <div class="btn primary sm action-btn">Kinnita</div>
+        </div>
+        <div class="alert warning">
+          <div class="dot"></div>
+          <span class="ticker-badge">UK INFRA</span>
+          <span>TRIG/SEQI/HICL/INPP = 28.4% portfellist. BoE otsus 20.03. Intressitundlik klaster.</span>
+          <div class="btn amber sm action-btn">Risk analüüs</div>
+        </div>
+      </div>
+
+      <!-- TABLE SECTION -->
+      <div class="section-head">
+        <h2>28 positsiooni · sort: AI skoor</h2>
+        <div class="filters">
+          <button class="filter-btn active" onclick="filterAll(this)">Kõik</button>
+          <button class="filter-btn" onclick="filterAll(this)">Müü ⚠</button>
+          <button class="filter-btn" onclick="filterAll(this)">Osta ↑</button>
+          <button class="filter-btn" onclick="filterAll(this)">UK Infra</button>
+          <button class="filter-btn" onclick="filterAll(this)">REITid</button>
+          <button class="filter-btn" onclick="filterAll(this)">Kasv</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="cell-ticker">Aktsia</th>
+              <th class="cell-mkt">Turg</th>
+              <th class="cell-price">Hind · päev</th>
+              <th class="cell-pos">Positsioon €</th>
+              <th class="cell-ret">Tootlus</th>
+              <th class="cell-score">Skoor</th>
+              <th class="cell-signals">Signaalid</th>
+              <th class="cell-chart">4 näd</th>
+              <th class="cell-rsi">RSI · trendi</th>
+              <th class="cell-val">Valuatsioon</th>
+              <th class="cell-div">Div %</th>
+            </tr>
+          </thead>
+          <tbody id="positions-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- RIGHT SIDEBAR -->
+    <div class="sidebar-right">
+      <!-- AI ADVISOR -->
+      <div class="sb-section">
+        <div class="sb-title">AI nõunik <span class="live">reaalajas</span></div>
+        <div class="advisor">
+          <div class="advisor-header">
+            <div class="advisor-avatar">AI</div>
+            <div>
+              <div class="advisor-name">Portfellihaldur</div>
+              <div class="advisor-role">30a kogemus · Bridgewater, Citadel, Renaissance</div>
+            </div>
+          </div>
+          <div class="advisor-msg">
+            <strong>Tänane prioriteet:</strong> Portfell on liialt kontsentreeritud UK infrastruktuuri (28.4%). BoE otsus homme — kui intresse ei langetata, langeb see klaster 3-5%. Soovitan:<br><br>
+            1. <strong>Müü PYPL ja SEVN</strong> — mõlemad teesid katkenud<br>
+            2. <strong>Realiseeri EQNR 50%</strong> — target saavutatud<br>
+            3. <strong>Vabastatud ~€180K</strong> → suuna kvaliteetkasvusse (NVDA, ASML) ja USA quality-dividendi (JNJ, PG)<br>
+            4. <strong>UK infra alla 20%</strong> — müü SUPR.L (kõige nõrgem fundamentaal)
+          </div>
+          <div class="advisor-actions">
+            <div class="btn primary sm">Kinnita plaan</div>
+            <div class="btn sm">Muuda</div>
+            <div class="btn sm">Arutle vastu</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MACRO CONTEXT -->
+      <div class="sb-section">
+        <div class="sb-title">Makro kontekst <span class="live">reaalajas</span></div>
+        <div class="macro-grid">
+          <div class="macro-item">
+            <div class="mi-label">Fed Funds</div>
+            <div class="mi-val">4.50%</div>
+            <div class="mi-chg neg">Püsib · CME 62% langetus juunis</div>
+          </div>
+          <div class="macro-item">
+            <div class="mi-label">US 10Y</div>
+            <div class="mi-val">4.28%</div>
+            <div class="mi-chg pos">-3bps täna</div>
+          </div>
+          <div class="macro-item">
+            <div class="mi-label">BoE Rate</div>
+            <div class="mi-val">4.50%</div>
+            <div class="mi-chg" style="color:var(--amber)">Otsus homme 20.03!</div>
+          </div>
+          <div class="macro-item">
+            <div class="mi-label">US CPI YoY</div>
+            <div class="mi-val">2.8%</div>
+            <div class="mi-chg neg">↓ langustrendis</div>
+          </div>
+          <div class="macro-item">
+            <div class="mi-label">Brent nafta</div>
+            <div class="mi-val">$71.40</div>
+            <div class="mi-chg pos">+0.8% · EQNR, AKRBP</div>
+          </div>
+          <div class="macro-item">
+            <div class="mi-label">EUR/USD</div>
+            <div class="mi-val">1.0892</div>
+            <div class="mi-chg pos">+0.2%</div>
+          </div>
+          <div class="macro-item">
+            <div class="mi-label">VIX</div>
+            <div class="mi-val">19.8</div>
+            <div class="mi-chg" style="color:var(--amber)">Normaalne, aga tõusev</div>
+          </div>
+          <div class="macro-item">
+            <div class="mi-label">DXY</div>
+            <div class="mi-val">103.4</div>
+            <div class="mi-chg neg">-0.3% · nõrgenev $</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECTOR ALLOCATION -->
+      <div class="sb-section">
+        <div class="sb-title">Sektori jaotus</div>
+        <div class="alloc-bars" id="sector-bars"></div>
+      </div>
+
+      <!-- CORRELATION WARNING -->
+      <div class="sb-section">
+        <div class="sb-title">Korrelatsioon · risk</div>
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;color:var(--t3);margin-bottom:4px">Portfelli kontsentratsioon</div>
+          <div class="risk-meter">
+            <span style="font-size:9px;color:var(--green)">Madal</span>
+            <div class="rm-track"><div class="rm-needle" style="left:68%"></div></div>
+            <span style="font-size:9px;color:var(--red)">Kõrge</span>
+          </div>
+        </div>
+        <div id="corr-map" style="margin-top:8px"></div>
+        <div style="font-size:10px;color:var(--t3);margin-top:6px">
+          ⚠ UK infra klaster (TRIG/SEQI/HICL/INPP) korrelatsioon <strong style="color:var(--red)">0.89</strong> — liiguvad koos. Hajutamine nõutav.
+        </div>
+      </div>
+
+      <!-- NEWS FEED -->
+      <div class="sb-section">
+        <div class="sb-title">Uudised · mõju <span class="live">reaalajas</span></div>
+        <div id="news-feed"></div>
+      </div>
+
+      <!-- EARNINGS CALENDAR -->
+      <div class="sb-section">
+        <div class="sb-title">Earningute kalender</div>
+        <div id="earnings-cal"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const positions = [
+  {tk:'EQNR.OL',name:'Equinor ASA',mkt:'no',price:355.10,cur:'NOK',chg:1.95,eur:30894,pct:2.6,ret:41.9,score:87,sigs:['Turg+','Fund+','Mom+'],sigT:['p','p','p'],spark:[60,55,50,45,40,35,30,25],rsi:52,rsiCtx:'Üle 50p MA',pe:'8.5',fpe:'7.2',div:4.0,cat:'energy'},
+  {tk:'AKRBP.OL',name:'Aker BP ASA',mkt:'no',price:340.50,cur:'NOK',chg:1.58,eur:35540,pct:3.0,ret:36.9,score:82,sigs:['Turg+','Fund+','Div!'],sigT:['p','p','w'],spark:[58,52,48,42,38,34,30,28],rsi:48,rsiCtx:'Üle 50p MA',pe:'5.8',fpe:'5.2',div:7.2,cat:'energy'},
+  {tk:'AGNC',name:'AGNC Investment',mkt:'us',price:10.50,cur:'USD',chg:1.65,eur:104161,pct:8.8,ret:10.1,score:64,sigs:['Div+','Rate?','Vol-'],sigT:['p','w','n'],spark:[50,46,44,42,40,38,36,34],rsi:58,rsiCtx:'Üle 200p MA',pe:'—',fpe:'—',div:13.7,cat:'reit'},
+  {tk:'VZ',name:'Verizon',mkt:'us',price:50.52,cur:'USD',chg:-0.88,eur:120989,pct:10.2,ret:20.9,score:72,sigs:['Div+','Fund~','Val+'],sigT:['p','w','p'],spark:[42,40,38,36,34,32,30,28],rsi:61,rsiCtx:'Üle 50p MA',pe:'10.2',fpe:'9.1',div:5.4,cat:'telecom'},
+  {tk:'LGEN.L',name:'Legal & General',mkt:'uk',price:251.10,cur:'GBX',chg:1.29,eur:142976,pct:12.0,ret:-3.2,score:55,sigs:['Div+','Fund~','Rate?'],sigT:['p','w','w'],spark:[34,36,38,40,42,40,38,36],rsi:46,rsiCtx:'50p MA juures',pe:'11.8',fpe:'9.4',div:8.6,cat:'uk-infra'},
+  {tk:'INPP.L',name:'Intl Public Partners',mkt:'uk',price:132.60,cur:'GBX',chg:2.31,eur:121973,pct:10.3,ret:4.4,score:51,sigs:['Div+','Rate?','Konts!'],sigT:['p','w','n'],spark:[38,40,42,44,42,40,38,36],rsi:44,rsiCtx:'All 50p MA',pe:'—',fpe:'—',div:8.0,cat:'uk-infra'},
+  {tk:'HICL.L',name:'HICL Infrastructure',mkt:'uk',price:122.00,cur:'GBX',chg:0.99,eur:133738,pct:11.3,ret:2.8,score:49,sigs:['Div+','Rate?','Konts!'],sigT:['p','w','n'],spark:[40,42,44,42,40,38,36,34],rsi:42,rsiCtx:'All 50p MA',pe:'—',fpe:'—',div:6.8,cat:'uk-infra'},
+  {tk:'TRIG.L',name:'Renewables Infra',mkt:'uk',price:67.90,cur:'GBX',chg:2.57,eur:95063,pct:8.0,ret:-2.2,score:47,sigs:['ESG+','Rate?','Konts!'],sigT:['i','w','n'],spark:[44,42,40,38,36,34,32,30],rsi:38,rsiCtx:'All 50p MA',pe:'—',fpe:'—',div:11.1,cat:'uk-infra'},
+  {tk:'SEQI.L',name:'Sequoia Econ Infra',mkt:'uk',price:80.90,cur:'GBX',chg:1.51,eur:120722,pct:10.2,ret:3.4,score:46,sigs:['Div+','Rate?','Konts!'],sigT:['p','w','n'],spark:[42,40,38,36,34,32,30,28],rsi:40,rsiCtx:'All 50p MA',pe:'—',fpe:'—',div:8.5,cat:'uk-infra'},
+  {tk:'MSFT',name:'Microsoft',mkt:'us',price:399.42,cur:'USD',chg:-0.13,eur:110240,pct:9.3,ret:-4.8,score:58,sigs:['Fund+','Mom-','Val?'],sigT:['p','n','w'],spark:[28,30,34,38,40,42,44,46],rsi:42,rsiCtx:'All 50p MA',pe:'35',fpe:'28',div:0.9,cat:'kasv'},
+  {tk:'NOVO-B.CO',name:'Novo Nordisk',mkt:'dk',price:249.45,cur:'DKK',chg:0.46,eur:83567,pct:7.0,ret:0.0,score:61,sigs:['Fund+','Earn⏳','Vol~'],sigT:['p','w','w'],spark:[50,48,44,40,38,36,34,36],rsi:44,rsiCtx:'Neutraalne',pe:'24',fpe:'19',div:4.7,cat:'kasv'},
+  {tk:'O',name:'Realty Income',mkt:'us',price:64.25,cur:'USD',chg:-1.03,eur:124267,pct:10.5,ret:16.2,score:68,sigs:['Div+','REIT+','Val+'],sigT:['p','p','p'],spark:[40,38,36,34,32,30,28,26],rsi:48,rsiCtx:'Üle 50p MA',pe:'56',fpe:'16',div:5.0,cat:'reit'},
+  {tk:'PYPL',name:'PayPal',mkt:'us',price:46.29,cur:'USD',chg:1.92,eur:68131,pct:5.7,ret:-36.9,score:31,sigs:['Turg-','Fund-','Tees✗'],sigT:['n','n','n'],spark:[22,26,30,34,38,42,46,50],rsi:32,rsiCtx:'All 50p MA',pe:'18',fpe:'14',div:0.6,cat:'kasv',flagged:true},
+  {tk:'ADBE',name:'Adobe',mkt:'us',price:254.79,cur:'USD',chg:1.16,eur:35161,pct:3.0,ret:-30.0,score:28,sigs:['AI risk','Mom-','Val?'],sigT:['n','n','w'],spark:[20,24,28,34,40,44,48,52],rsi:36,rsiCtx:'Ülemüüdud',pe:'22',fpe:'17',div:0,cat:'kasv',flagged:true},
+  {tk:'SEVN',name:'Seven Hills Realty',mkt:'us',price:8.40,cur:'USD',chg:-0.71,eur:62840,pct:5.3,ret:-39.3,score:18,sigs:['Stop!','Div✗','Fund-'],sigT:['n','n','n'],spark:[18,22,28,34,40,46,52,56],rsi:28,rsiCtx:'Ülemüüdud',pe:'8.4',fpe:'—',div:14.2,cat:'reit',flagged:true},
+];
+
+const sectors = [
+  {name:'UK Infrastr.',pct:28.4,color:'var(--teal)'},
+  {name:'USA REITid',pct:18.2,color:'var(--purple)'},
+  {name:'Energia',pct:5.6,color:'var(--red)'},
+  {name:'Kasv/Tech',pct:15.0,color:'var(--blue)'},
+  {name:'Telecom',pct:10.2,color:'var(--cyan)'},
+  {name:'Dividendid',pct:12.8,color:'var(--green)'},
+  {name:'Võlakirjad',pct:6.4,color:'var(--amber)'},
+  {name:'Muu',pct:3.4,color:'var(--t3)'},
+];
+
+const news = [
+  {time:'18:30',headline:'<strong>BoE</strong> intressiotsus homme — turg ootab püsimist 4.50% juures.',impact:'bear',tag:'UK Infra mõju'},
+  {time:'17:45',headline:'<strong>Brent</strong> nafta +0.8% $71.40-le. OPEC+ kärped püsivad.',impact:'bull',tag:'EQNR, AKRBP'},
+  {time:'16:20',headline:'<strong>PayPal</strong> kaotab turuosa Stripe\'ile. Analüütikud langetavad targeti.',impact:'bear',tag:'PYPL müügisignaal'},
+  {time:'15:10',headline:'<strong>Microsoft</strong> Azure kasv aeglustub 28%-le. Oodati 31%.',impact:'bear',tag:'MSFT'},
+  {time:'14:30',headline:'<strong>Novo Nordisk</strong> Ozempic konkurent Eli Lilly saab FDA heakskiidu.',impact:'bear',tag:'NOVO-B.CO'},
+  {time:'12:15',headline:'<strong>Fed</strong> Waller: "Inflatsioon langeb, aga pole veel valmis langetama."',impact:'neutral',tag:'TLT, AGNC'},
+];
+
+const earnings = [
+  {date:'20.03',tk:'VZ',name:'Verizon Q4',est:'EPS $1.23'},
+  {date:'24.03',tk:'NOVO-B.CO',name:'Novo Q4',est:'Rev DKK 72.8B'},
+  {date:'28.03',tk:'LGEN.L',name:'L&G FY',est:'Div 20.3p'},
+  {date:'02.04',tk:'MSFT',name:'Microsoft Q3',est:'EPS $3.22'},
+];
+
+function scoreColor(s){return s>=70?'var(--green)':s>=45?'var(--amber)':'var(--red)'}
+function scoreClass(s){return s>=70?'high':s>=45?'mid':'low'}
+
+function renderScore(score){
+  const r=16,c=Math.PI*2*r,offset=c-(score/100)*c,col=scoreColor(score);
+  return `<div class="score"><svg width="36" height="36" viewBox="0 0 36 36"><circle cx="18" cy="18" r="${r}" fill="none" stroke="var(--bg)" stroke-width="3"/><circle cx="18" cy="18" r="${r}" fill="none" stroke="${col}" stroke-width="3" stroke-dasharray="${c}" stroke-dashoffset="${offset}" stroke-linecap="round"/></svg><div class="val" style="color:${col}">${score}</div></div>`;
+}
+
+function renderSparkline(data,ret){
+  const col=ret>=0?'var(--green)':'var(--red)';
+  const max=Math.max(...data),min=Math.min(...data);
+  return data.map((v,i)=>{
+    const h=Math.max(3,((v-min)/(max-min||1))*22);
+    const opacity=0.3+0.7*(i/data.length);
+    return `<div class="spark-bar" style="height:${h}px;background:${col};opacity:${opacity}"></div>`;
+  }).join('');
+}
+
+function renderPositions(){
+  const body=document.getElementById('positions-body');
+  body.innerHTML=positions.sort((a,b)=>b.score-a.score).map(p=>{
+    const rsiCol=p.rsi>70?'var(--red)':p.rsi>60?'var(--amber)':p.rsi<35?'var(--red)':'var(--green)';
+    return `<tr class="${p.flagged?'flagged':''}">
+      <td class="cell-ticker"><div class="tk">${p.tk}${p.flagged?' ⚠':''}</div><div class="tk-name">${p.name}</div></td>
+      <td class="cell-mkt"><span class="mkt-tag ${p.mkt}">${p.mkt.toUpperCase()}</span></td>
+      <td class="cell-price"><div class="price-main">${p.cur==='GBX'?'£':p.cur==='NOK'?'':p.cur==='DKK'?'':p.cur==='USD'?'$':'€'}${p.price.toFixed(2)}</div><div class="chg ${p.chg>=0?'pos':'neg'}">${p.chg>=0?'+':''}${p.chg.toFixed(2)}%</div></td>
+      <td class="cell-pos"><div class="eur-val">€${(p.eur).toLocaleString()}</div><div class="pct-port">${p.pct}%</div></td>
+      <td class="cell-ret"><div class="chg ${p.ret>=0?'pos':'neg'}" style="font-size:13px;font-weight:700">${p.ret>=0?'+':''}${p.ret.toFixed(1)}%</div></td>
+      <td class="cell-score">${renderScore(p.score)}</td>
+      <td class="cell-signals"><div class="sigs">${p.sigs.map((s,i)=>`<span class="sig ${p.sigT[i]}">${s}</span>`).join('')}</div></td>
+      <td class="cell-chart"><div class="spark">${renderSparkline(p.spark,p.ret)}</div></td>
+      <td class="cell-rsi"><div class="rsi-wrap"><div class="rsi-num" style="color:${rsiCol}">${p.rsi}</div><div class="rsi-track"><div class="rsi-fill" style="width:${p.rsi}%;background:${rsiCol}"></div></div><div class="rsi-ctx">${p.rsiCtx}</div></div></td>
+      <td class="cell-val"><div class="vpills">${p.pe!=='—'?`<span class="vpill">P/E ${p.pe}</span>`:''}${p.fpe!=='—'?`<span class="vpill">fP ${p.fpe}</span>`:''}</div></td>
+      <td class="cell-div"><span style="color:${p.div>=6?'var(--green)':p.div>=3?'var(--t1)':'var(--t3)'};font-family:var(--font-mono);font-weight:500">${p.div>0?p.div.toFixed(1)+'%':'—'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSectors(){
+  const el=document.getElementById('sector-bars');
+  el.innerHTML=sectors.map(s=>`
+    <div class="alloc-row">
+      <div class="alloc-label">${s.name}</div>
+      <div class="alloc-track"><div class="alloc-fill" style="width:${s.pct}%;background:${s.color}"></div></div>
+      <div class="alloc-pct">${s.pct}%</div>
+    </div>
+  `).join('');
+}
+
+function renderCorrelation(){
+  const tickers=['TRIG','SEQI','HICL','INPP','SUPR','LGEN'];
+  const data=[[1,.89,.86,.91,.72,.45],[.89,1,.88,.85,.68,.42],[.86,.88,1,.84,.70,.40],[.91,.85,.84,1,.74,.48],[.72,.68,.70,.74,1,.38],[.45,.42,.40,.48,.38,1]];
+  const n=tickers.length;
+  const el=document.getElementById('corr-map');
+  let html=`<div class="corr-grid" style="grid-template-columns:40px repeat(${n},1fr)">`;
+  html+=`<div></div>`;
+  tickers.forEach(t=>html+=`<div class="corr-label">${t}</div>`);
+  data.forEach((row,i)=>{
+    html+=`<div class="corr-label">${tickers[i]}</div>`;
+    row.forEach((v,j)=>{
+      const intensity=Math.abs(v);
+      const hue=v>0.7?'var(--red)':v>0.5?'var(--amber)':'var(--green)';
+      const bg=i===j?'var(--bg4)':`rgba(${v>0.7?'255,71,87':v>0.5?'255,184,48':'0,214,143'},${intensity*0.3})`;
+      html+=`<div class="corr-cell" style="background:${bg};color:${i===j?'var(--t3)':hue}">${i===j?'—':v.toFixed(2)}</div>`;
+    });
+  });
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+function renderNews(){
+  const el=document.getElementById('news-feed');
+  el.innerHTML=news.map(n=>`
+    <div class="news-item">
+      <div class="news-time">${n.time} CET</div>
+      <div class="news-headline">${n.headline}</div>
+      <div class="news-impact ${n.impact}">${n.impact==='bull'?'↑ Bullish':n.impact==='bear'?'↓ Bearish':'— Neutraalne'} · ${n.tag}</div>
+    </div>
+  `).join('');
+}
+
+function renderEarnings(){
+  const el=document.getElementById('earnings-cal');
+  el.innerHTML=earnings.map(e=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(26,31,50,0.4);font-size:11px">
+      <div style="width:40px;font-family:var(--font-mono);color:var(--amber);font-weight:600;font-size:10px">${e.date}</div>
+      <div style="font-weight:600;font-family:var(--font-mono)">${e.tk}</div>
+      <div style="color:var(--t2);flex:1">${e.name}</div>
+      <div style="color:var(--t3);font-family:var(--font-mono);font-size:10px">${e.est}</div>
+    </div>
+  `).join('');
+}
+
+function runScan(){
+  document.querySelector('.btn.primary').textContent='⟳ Skaneerib...';
+  setTimeout(()=>{document.querySelector('.btn.primary').textContent='⟳ Skaneeri'},2000);
+}
+function filterAll(btn){
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+function toggleView(){}
+
+renderPositions();
+renderSectors();
+renderCorrelation();
+renderNews();
+renderEarnings();
+</script>

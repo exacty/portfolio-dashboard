@@ -8,6 +8,10 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* Dashboard theme colors (mockup.html) */
+  --color-bg: #06080d;
+  --color-card: #0b0e16;
+  --color-border: #1a1f32;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
