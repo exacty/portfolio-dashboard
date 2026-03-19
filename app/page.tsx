@@ -21,6 +21,7 @@ type Position = {
   eur: number;
   pct: number;
   ret: number;
+  ret_4w?: number;
   score: number;
   sigs: string[];
   sigT: SignalKind[];
@@ -867,14 +868,15 @@ function ScoreRing({ score }: { score: number }) {
 
 function Sparkline({ data, ret }: { data: number[]; ret: number }) {
   const col = ret >= 0 ? "var(--green)" : "var(--red)";
-  const max = Math.max(...data);
-  const min = Math.min(...data);
+  const arr = Array.isArray(data) && data.length > 0 ? data : [ret, ret];
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
 
   return (
     <div className="spark" aria-hidden>
-      {data.map((v, i) => {
+      {arr.map((v, i) => {
         const h = Math.max(3, ((v - min) / (max - min || 1)) * 22);
-        const opacity = 0.3 + 0.7 * (i / data.length);
+        const opacity = 0.3 + 0.7 * (i / arr.length);
         return (
           <div
             key={i}
@@ -1831,8 +1833,13 @@ export default function Home() {
                           </div>
                         </td>
 
-                        <td className="cell-chart">
-                          <Sparkline data={p.spark} ret={p.ret} />
+                        <td className="cell-chart" title={typeof p.ret_4w === "number" ? `4 näd: ${p.ret_4w >= 0 ? "+" : ""}${p.ret_4w}%` : undefined}>
+                          <Sparkline data={p.spark ?? []} ret={p.ret} />
+                          {typeof p.ret_4w === "number" && (
+                            <div style={{ fontSize: 9, color: "var(--t3)", marginTop: 2 }}>
+                              {p.ret_4w >= 0 ? "+" : ""}{p.ret_4w}%
+                            </div>
+                          )}
                         </td>
 
                         <td className="cell-rsi">

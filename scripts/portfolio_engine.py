@@ -257,8 +257,15 @@ def _make_signals(
         t1 = "p" if ret_pct >= 0 else "n"
         s1 = "Turg+" if t1 == "p" else "Turg-"
 
-    # S2: Fundamentaalid: "Fund+" if P/E < 20 and reasonable, "Fund-" if P/E > 25
-    pe_val = _safe_float(pe) if pe is not None else None
+    # S2: Fundamentaalid: "Fund+" if P/E < 20, "Fund-" if P/E > 25
+    pe_val: Optional[float] = None
+    if pe is not None:
+        try:
+            v = float(pe)
+            if v > 0 and np.isfinite(v):
+                pe_val = v
+        except (ValueError, TypeError):
+            pass
     if pe_val is not None and pe_val > 0:
         if pe_val < 18:
             s2, t2 = "Fund+", "p"
@@ -339,13 +346,27 @@ def _format_fpe(x: Any) -> str:
     return _format_pe(x)
 
 
-def _build_info_from_aggregator(fundamentals: Dict[str, Any], name: str) -> Dict[str, Any]:
+def _build_info_from_aggregator(fundamentals: Dict[str, Any], name: str, ticker: str = "") -> Dict[str, Any]:
     """Build info dict compatible with _compute_position from aggregator fundamentals."""
     div = fundamentals.get("div_yield")
     div_yield = (div / 100.0) if div is not None and div > 0 else None
+    pe = fundamentals.get("pe")
+    fpe = fundamentals.get("fwd_pe")
+    # Fallback to yfinance when aggregator returns no P/E
+    if (pe is None or fpe is None) and ticker:
+        try:
+            yf_info = yf.Ticker(ticker).info or {}
+            pe = pe if pe is not None else yf_info.get("trailingPE")
+            fpe = fpe if fpe is not None else yf_info.get("forwardPE")
+            if not name or name == ticker:
+                name = yf_info.get("shortName") or yf_info.get("longName") or ticker
+            if div_yield is None and yf_info.get("dividendYield"):
+                div_yield = float(yf_info["dividendYield"]) if yf_info["dividendYield"] <= 1 else float(yf_info["dividendYield"]) / 100.0
+        except Exception:
+            pass
     return {
-        "trailingPE": fundamentals.get("pe"),
-        "forwardPE": fundamentals.get("fwd_pe"),
+        "trailingPE": pe,
+        "forwardPE": fpe,
         "shortName": name,
         "longName": name,
         "name": name,
@@ -367,9 +388,12 @@ def _fetch_position_data_aggregator(tk: str, portfolio_positions: Dict[str, Any]
         ibkr_price = float(pos_data["market_price"])
 
     hist, hist_src = agg.get_history_with_source(tk, "1y")
-    price_already_normalized = (tk.endswith(".L") or tk in GBX_PENNY_TICKERS) and hist_src in ("yfinance", "yahoo_http")
     fund = agg.get_fundamentals(tk)
     price_res = agg.get_price(tk, ibkr_price=ibkr_price, ibkr_sync_age_hours=last_ibkr_sync_hours)
+    # Price from aggregator is always normalized (pounds for .L). Hist may or may not be.
+    has_valid_price = price_res.get("price", 0) and float(price_res.get("price", 0)) > 0
+    hist_normalized = (tk.endswith(".L") or tk in GBX_PENNY_TICKERS) and hist_src in ("yfinance", "yahoo_http")
+    price_already_normalized = hist_normalized or (has_valid_price and (tk.endswith(".L") or tk in GBX_PENNY_TICKERS))
     earn_data, earn_src = agg.get_earnings_with_source(tk)
 
     name = tk
@@ -379,7 +403,7 @@ def _fetch_position_data_aggregator(tk: str, portfolio_positions: Dict[str, Any]
     except Exception:
         pass
 
-    info = _build_info_from_aggregator(fund, name)
+    info = _build_info_from_aggregator(fund, name, tk)
     dq = price_res.get("data_quality", {})
     fund_quality: Dict[str, Any] = {}
     if fund.get("pe_all_sources"):
@@ -626,15 +650,25 @@ def _compute_position(
     if len(close) < 2:
         price_raw = price_override if price_override and price_override > 0 else float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
         day_chg_pct = 0.0
-        spark = [price_raw] * 8
+        spark = [float(price_raw)] * 8
         rsi = 50.0
+        ret_4w = 0.0
     else:
         price_raw = price_override if price_override and price_override > 0 else _safe_scalar(close, -1)
         prev = _safe_scalar(close, -2)
         day_chg_pct = ((price_raw - prev) / prev) * 100.0 if prev else 0.0
-        spark = list(map(float, close.tail(8).tolist()))
+        spark_raw = list(map(float, close.tail(8).tolist()))
+        if len(spark_raw) >= 8:
+            spark = spark_raw[:8]
+        else:
+            pad_val = spark_raw[-1] if spark_raw else float(price_raw)
+            spark = [pad_val] * (8 - len(spark_raw)) + spark_raw
 
         rsi = _compute_rsi14(close)
+        # 4-week (29-day) return for "4 näd" column
+        lookback = min(29, len(close) - 1)
+        base = _safe_scalar(close, -(lookback + 1)) if lookback > 0 else _safe_scalar(close, 0)
+        ret_4w = ((price_raw - base) / base) * 100.0 if base and base > 0 else 0.0
 
     cur = _cur_from_ticker(tk, portfolio_positions)
     mkt = _mkt_from_ticker(tk)
@@ -642,28 +676,25 @@ def _compute_position(
     shares = float(portfolio_positions.get(tk, {}).get("shares", 0.0))
     avg_price_raw = float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
 
-    # ret_pct = return vs avg_price (cost basis), not 29-day
+    # ret_pct = return vs avg_price (cost basis)
     price_already_normalized = (data_sources or {}).get("price_already_normalized", False)
     if len(close) < 2 or price_already_normalized:
-        avg_for_ret = avg_price_raw  # both in pounds (override/portfolio)
+        avg_for_ret = avg_price_raw
     elif cur == "GBP" and tk in GBX_PENNY_TICKERS:
-        avg_for_ret = avg_price_raw * 100.0  # portfolio stores pounds, yf close is pence
+        avg_for_ret = avg_price_raw * 100.0
     else:
         avg_for_ret = avg_price_raw
-    ret_pct = ((price_raw - avg_for_ret) / avg_for_ret) * 100.0 if avg_for_ret else 0.0
+    ret_pct = ((price_raw - avg_for_ret) / avg_for_ret) * 100.0 if avg_for_ret and avg_for_ret > 0 else 0.0
 
-    # yfinance returns .L ticker prices in pence; DataAggregator may already normalize to pounds
-    price_already_normalized = (data_sources or {}).get("price_already_normalized", False)
-    if cur == "GBP" and tk.endswith(".L") and len(close) >= 2 and not price_already_normalized:
+    if cur == "GBP" and (tk.endswith(".L") or tk in GBX_PENNY_TICKERS) and len(close) >= 2 and not price_already_normalized:
         price_raw = price_raw / 100.0
+    cur_price_for_eur = cur
 
-    # Div / valuations
     trailing_pe = info.get("trailingPE")
     forward_pe = info.get("forwardPE")
     pe = _format_pe(trailing_pe)
     fpe = _format_fpe(forward_pe)
 
-    # Div yield: dividendYield, trailingAnnualDividendYield, dividendRate, or from dividends history
     div_yield_pct = _compute_div_yield(tk, price_raw, info)
 
     ma50_val: Optional[float] = None
@@ -676,10 +707,16 @@ def _compute_position(
         except (ValueError, TypeError):
             pass
 
-    eur_price = _to_eur_price(tk, price_raw, cur, fx_rates)
+    eur_price = _to_eur_price(tk, price_raw, cur_price_for_eur, fx_rates)
     avg_eur = _to_eur_price(tk, avg_price_raw, cur, fx_rates)
-    # For table UI, we report current P&L later as KPIs; keep position fields for now.
+    if avg_eur and avg_eur > 0:
+        ret_pct = ((eur_price - avg_eur) / avg_eur) * 100.0
+
+    ret_pct = 0.0 if not np.isfinite(ret_pct) else ret_pct
+    ret_4w = 0.0 if not np.isfinite(ret_4w) else ret_4w
+
     score = _heuristic_score(ret_pct, rsi, div_yield_pct)
+    score = max(0, min(100, int(round(score)))) if np.isfinite(score) else 50
     sigs, sigT = _make_signals(ret_pct, rsi, div_yield_pct, price_raw, ma50_val, pe_val, tk)
 
     name = _ticker_name(tk, info)
@@ -689,22 +726,23 @@ def _compute_position(
         "tk": tk,
         "name": name,
         "mkt": mkt,
-        "price": round(price_raw, 2),
+        "price": round(float(price_raw), 2),
         "cur": cur,
         "chg": round(day_chg_pct, 2),
-        "eur": 0.0,  # filled after computing portfolio totals
-        "pct": 0.0,  # filled after computing portfolio totals
-        "ret": round(ret_pct, 1),
-        "score": int(round(score)),
+        "eur": 0.0,
+        "pct": 0.0,
+        "ret": round(float(ret_pct), 1),
+        "ret_4w": round(float(ret_4w), 1),
+        "score": score,
         "sigs": sigs,
         "sigT": sigT,
-        "spark": [round(v, 2) for v in spark],
+        "spark": [round(float(v), 2) for v in spark[:8]],
         "rsi": int(round(rsi)),
         "rsiCtx": rsi_ctx,
         "pe": pe,
         "fpe": fpe,
         "div": round(div_yield_pct, 1),
-        "cat": "",  # filled by mapping
+        "cat": "",
         "flagged": False,
         "avg_eur": avg_eur,
         "eur_price": eur_price,
@@ -934,6 +972,7 @@ def build_portfolio_json() -> Dict[str, Any]:
         portfolio_data = json.load(f)
 
     portfolio_positions: Dict[str, Any] = portfolio_data["positions"]
+    portfolio_meta: Dict[str, Any] = portfolio_data.get("portfolio_meta") or {}
     tickers_all: List[str] = list(portfolio_positions.keys())
     fx_rates = _pull_fx_rates()
 
@@ -965,6 +1004,26 @@ def build_portfolio_json() -> Dict[str, Any]:
         for etf in SECTOR_ETFS + ["^GSPC", "^TNX"]:
             if etf not in price_hist_pos:
                 price_hist_pos[etf] = etf_hist.get(etf, pd.DataFrame())
+
+        # Fallback: tickers with empty/short hist get batch yf download for RSI/spark
+        empty_hist_tickers = [tk for tk in tickers_all if price_hist_pos.get(tk, pd.DataFrame()).empty or len(price_hist_pos.get(tk, pd.DataFrame())) < 15]
+        if empty_hist_tickers:
+            fallback_hist = _download_history_batch(empty_hist_tickers, period="1y")
+            for tk in empty_hist_tickers:
+                df = fallback_hist.get(tk, pd.DataFrame())
+                if not df.empty and len(df) >= 2:
+                    norm = False
+                    if tk.endswith(".L") or tk in GBX_PENNY_TICKERS:
+                        df = df.copy()
+                        for c in ["Open", "High", "Low", "Close"]:
+                            if c in df.columns:
+                                df[c] = df[c] / 100.0
+                        norm = True
+                    price_hist_pos[tk] = df
+                    ds = data_sources_by_ticker.get(tk) or {}
+                    ds = dict(ds)
+                    ds["price_already_normalized"] = norm
+                    data_sources_by_ticker[tk] = ds
 
         for tk in tickers_all:
             ds = data_sources_by_ticker.get(tk, {})
@@ -1098,8 +1157,12 @@ def build_portfolio_json() -> Dict[str, Any]:
     news = _real_news_from_tickers(tickers_all, positions)
     earnings = _real_earnings_calendar(tickers_all)
 
-    # KPIs
+    # KPIs — use portfolio_meta overrides when provided (cash + margin vs computed)
+    cash_invested = _safe_float(portfolio_meta.get("cash_invested_eur"))
+    margin_used = _safe_float(portfolio_meta.get("margin_used_eur"))
     cost_basis_eur = sum(p["avg_eur"] * p["shares"] for p in positions)
+    if cash_invested > 0:
+        cost_basis_eur = cash_invested
     unrealized_pnl = total_eur - cost_basis_eur
     if os.environ.get("PORTFOLIO_DEBUG"):
         for p in positions:
@@ -1172,6 +1235,8 @@ def build_portfolio_json() -> Dict[str, Any]:
         "unrealizedPnl": round(unrealized_pnl, 0),
         "unrealizedPnlPct": round(unrealized_pnl_pct, 1),
         "costBasisEur": round(cost_basis_eur, 0),
+        "cashInvestedEur": round(cash_invested, 0) if cash_invested > 0 else None,
+        "marginUsedEur": round(margin_used, 0) if margin_used > 0 else None,
         "divYield": round(div_yield, 1),
         "divYearlyEur": round(div_yearly_eur, 0),
         "divMonthlyEur": round(div_monthly_eur, 0),

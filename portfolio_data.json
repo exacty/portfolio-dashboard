@@ -1,4 +1,8 @@
 {
+  "portfolio_meta": {
+    "cash_invested_eur": 1200000,
+    "margin_used_eur": 900000
+  },
   "positions": {
     "EQNR.OL": {
       "avg_price": 250.3251,
