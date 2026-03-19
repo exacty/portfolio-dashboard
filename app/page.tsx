@@ -879,6 +879,19 @@ export default function Home() {
   }>({ portfolio: [], spy: [] });
 
   const [headerMeta, setHeaderMeta] = useState("");
+  const [cacheAge, setCacheAge] = useState<string>("");
+
+  useEffect(() => {
+    if (portfolioData?.generatedAt) {
+      const update = () => {
+        const mins = Math.floor((Date.now() - new Date(portfolioData!.generatedAt!).getTime()) / 60000);
+        setCacheAge(mins < 1 ? "just nüüd" : mins + " min tagasi");
+      };
+      update();
+      const interval = setInterval(update, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [portfolioData]);
 
   const monitorAlerts = useMemo<AlertItem[]>(() => {
     const alerts = lastScan.alerts ?? { urgent: [], warning: [], info: [] };
