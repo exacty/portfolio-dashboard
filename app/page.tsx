@@ -76,7 +76,14 @@ type Kpis = {
   dayChgPct?: number;
   unrealizedPnl?: number;
   unrealizedPnlPct?: number;
+  realizedPnl?: number;
   costBasisEur?: number;
+  costBasisPositionsEur?: number;
+  cashInvestedEur?: number | null;
+  marginUsedEur?: number | null;
+  marginLoan?: number | null;
+  netEquity?: number;
+  leverageRatio?: number | null;
   divYield?: number;
   divYearlyEur?: number;
   divMonthlyEur?: number;
@@ -84,6 +91,12 @@ type Kpis = {
   sharpe?: number;
   concentration?: number;
   attention?: number;
+  attentionSell?: number;
+  attentionRsi?: number;
+  attentionTarget?: number;
+  attentionStop?: number;
+  attentionSummary?: string;
+  portfolioDrawdownPct?: number | null;
 };
 
 type MacroItem = { label: string; value: string; raw?: number; chg?: number; chgText?: string };
@@ -132,12 +145,51 @@ type AiAnalyzeResponse = {
 };
 
 type AiChatResponse = { replyHtml: string };
+type TickerDividendsResponse = {
+  ticker: string;
+  payments: Array<{ date: string; amount: number }>;
+  /** DB / pipeline kuvamisväli (mitme allika ühendatud). */
+  displayAvgAnnualYieldPct?: number;
+  avgAnnualYieldPct: number;
+  currency?: string;
+  yearsInAvg?: number;
+  analysis?: Record<string, unknown>;
+  updatedAt?: string;
+  error?: string;
+};
 type TickerEarningsResponse = {
   ticker: string;
   quarterlyEarnings: Array<{ date: string; eps: number | null; epsGrowth?: number }>;
   canslim: Record<string, string>;
 };
 type ChatMessage = { role: "user" | "ai"; text?: string; html?: string };
+
+type AiHistoryRow = {
+  action?: string;
+  payload?: Record<string, unknown>;
+};
+
+function chatMessagesFromAiHistory(rows: AiHistoryRow[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const row of rows) {
+    const act = row.action;
+    const p = row.payload;
+    if (!p || typeof p !== "object") continue;
+    if (act === "chat_user") {
+      const t = typeof p.message === "string" ? p.message : "";
+      if (t.trim()) out.push({ role: "user", text: t });
+    } else if (act === "chat") {
+      const html =
+        typeof p.replyHtml === "string"
+          ? p.replyHtml
+          : typeof p.reply === "string"
+            ? p.reply
+            : "";
+      if (html.trim()) out.push({ role: "ai", html });
+    }
+  }
+  return out;
+}
 
 const styles = `
 *{margin:0;padding:0;box-sizing:border-box}
@@ -241,7 +293,6 @@ tbody tr.flagged:hover{background:rgba(255,71,87,0.04)}
 .cell-chart{width:72px}
 .cell-rsi{width:70px}
 .cell-val{width:80px}
-.cell-div{width:60px}
 
 .tk{font-weight:700;font-size:13px;letter-spacing:-0.3px;font-family:var(--font-mono)}
 .tk-name{font-size:10px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
@@ -274,6 +325,11 @@ tbody tr.flagged:hover{background:rgba(255,71,87,0.04)}
 /* MINI SPARKLINE */
 .spark{height:24px;display:flex;align-items:end;gap:1px}
 .spark-bar{width:3px;border-radius:1px 1px 0 0;transition:height 0.3s}
+.div-bars-wrap{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2px;min-height:38px}
+.div-bars{display:flex;align-items:flex-end;justify-content:center;gap:1px;width:100%;max-width:70px}
+.div-bar{flex:1 1 0;min-width:2px;max-width:5px;border-radius:3px 3px 0 0;transition:height 0.25s}
+.div-bars--empty{opacity:0.12;background:linear-gradient(180deg,transparent,var(--border));border-radius:4px;width:70px}
+.div-yield-lbl{font-size:9px;font-family:var(--font-mono);font-weight:500;line-height:1.15;text-align:center;max-width:68px}
 
 /* RSI */
 .rsi-wrap{display:flex;flex-direction:column;gap:2px}
@@ -893,6 +949,96 @@ function Sparkline({ data, ret }: { data: number[]; ret: number }) {
   );
 }
 
+/** Iga tulp = üks dividendimakse (~3 a); kõrgus ∝ summa. All: aastane keskm. yield (maksete aastakeskm / hind). */
+function DividendBars({
+  payments,
+  displayAvgAnnualYieldPct,
+  avgAnnualYieldPct,
+  fallbackDivPct,
+  ret,
+  analysis,
+}: {
+  payments: Array<{ date: string; amount: number }>;
+  displayAvgAnnualYieldPct?: number;
+  avgAnnualYieldPct: number;
+  fallbackDivPct: number;
+  ret: number;
+  analysis?: Record<string, unknown>;
+}) {
+  const hPx = 22;
+  const amounts = payments.map((p) => p.amount);
+  const max = amounts.length ? Math.max(...amounts) : 1;
+  const lo = ret >= 0 ? "rgba(10, 80, 52, 0.92)" : "rgba(75, 26, 26, 0.92)";
+  const hi = ret >= 0 ? "#3ae6a8" : "#ff9494";
+  const mergedYield = displayAvgAnnualYieldPct ?? avgAnnualYieldPct;
+  const displayYield = mergedYield > 0 ? mergedYield : fallbackDivPct;
+  const src = analysis?.sourcesWithPayments;
+  const srcHint = Array.isArray(src) && src.length ? ` · allikad: ${(src as string[]).join(", ")}` : "";
+  const conflicts = analysis?.merge;
+  const conflictN =
+    conflicts && typeof conflicts === "object" && conflicts !== null && "conflicts" in conflicts
+      ? Array.isArray((conflicts as { conflicts?: unknown }).conflicts)
+        ? (conflicts as { conflicts: unknown[] }).conflicts.length
+        : 0
+      : 0;
+  const tip =
+    payments.length > 0
+      ? `${payments.length} makset ~3 a · max ${max.toFixed(4)}${srcHint}${conflictN ? ` · lahknemisi: ${conflictN}` : ""}`
+      : `Dividendi ajalugu — laen või puudub${srcHint}`;
+
+  return (
+    <div className="div-bars-wrap" title={tip}>
+      {payments.length > 0 ? (
+        <div className="div-bars" style={{ height: hPx }} aria-hidden>
+          {payments.map((p, i) => {
+            const h = Math.max(2, (p.amount / max) * hPx);
+            const opacity = 0.35 + 0.65 * ((i + 1) / payments.length);
+            return (
+              <div
+                key={`${p.date}-${i}`}
+                className="div-bar"
+                style={{
+                  height: `${h}px`,
+                  opacity,
+                  background: `linear-gradient(180deg, ${hi} 0%, ${lo} 100%)`,
+                }}
+                title={`${p.date}: ${p.amount.toFixed(4)}`}
+              />
+            );
+          })}
+        </div>
+      ) : (
+        <div className="div-bars div-bars--empty" style={{ height: hPx }} aria-hidden />
+      )}
+      <div
+        className="div-yield-lbl"
+        style={{
+          color: displayYield >= 6 ? "var(--green)" : displayYield >= 3 ? "var(--t1)" : "var(--t3)",
+        }}
+      >
+        {displayYield > 0 ? `${displayYield.toFixed(1)}%` : "—"}
+      </div>
+    </div>
+  );
+}
+
+/** Tooltip ainult pärast mount’i → serveri ja kliendi esimene HTML klapib (väldib hydration drift’i). */
+const DIV_COLUMN_TOOLTIP =
+  "~3 a maksete tulbad (kõrgus = summa); all aastane keskm. dividend yield";
+
+function DividendColumnTh() {
+  const ref = useRef<HTMLTableCellElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) el.setAttribute("title", DIV_COLUMN_TOOLTIP);
+  }, []);
+  return (
+    <th ref={ref} className="cell-div" scope="col" aria-label={DIV_COLUMN_TOOLTIP}>
+      Div · 3a
+    </th>
+  );
+}
+
 export default function Home() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [scoreDir, setScoreDir] = useState<SortDir>("desc");
@@ -911,6 +1057,7 @@ export default function Home() {
   }));
   const [portfolioLoading, setPortfolioLoading] = useState(true);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [dividendMap, setDividendMap] = useState<Record<string, TickerDividendsResponse>>({});
 
   const [aiAdvisorHtml, setAiAdvisorHtml] = useState<string>(fallbackAdvisorHtml);
   const [aiAlerts] = useState<AlertItem[]>(fallbackAlerts);
@@ -1025,13 +1172,55 @@ export default function Home() {
     return arr;
   }, [filter, scoreDir, uiPositions]);
 
-  const fetchPortfolio = useCallback(async () => {
+  const dividendFetchKey = useMemo(
+    () =>
+      [...new Set((portfolioData.positions ?? []).map((p) => p.tk).filter(Boolean))]
+        .sort()
+        .join("|"),
+    [portfolioData.positions]
+  );
+
+  useEffect(() => {
+    if (!dividendFetchKey || portfolioLoading) return;
+    const tickers = dividendFetchKey.split("|").filter(Boolean);
+    if (tickers.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const entries = await Promise.all(
+        tickers.map(async (tk) => {
+          try {
+            const res = await fetch(`/api/ticker-dividends?ticker=${encodeURIComponent(tk)}&years=3`);
+            if (!res.ok) return [tk, null] as const;
+            const j = (await res.json()) as TickerDividendsResponse;
+            if (!j || typeof j !== "object") return [tk, null] as const;
+            return [tk, j] as const;
+          } catch {
+            return [tk, null] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setDividendMap((prev) => {
+        const next = { ...prev };
+        for (const [tk, row] of entries) {
+          if (row && Array.isArray(row.payments)) next[tk] = row;
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dividendFetchKey, portfolioLoading]);
+
+  const fetchPortfolio = useCallback(async (opts?: { forceRefresh?: boolean }) => {
     setPortfolioLoading(true);
     setPortfolioError(null);
     try {
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 120_000);
-      const res = await fetch("/api/portfolio", { method: "GET", signal: controller.signal });
+      const q = opts?.forceRefresh ? "?refresh=1" : "";
+      const res = await fetch(`/api/portfolio${q}`, { method: "GET", signal: controller.signal });
       window.clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as PortfolioResponse;
@@ -1058,7 +1247,8 @@ export default function Home() {
 
   useEffect(() => {
     void fetchPortfolio();
-    const id = window.setInterval(() => void fetchPortfolio(), 5 * 60 * 1000);
+    // Automaatne taustavärskendus kord ööpäevas; koheseks uuenduseks kasuta nuppu "Uuenda andmeid"
+    const id = window.setInterval(() => void fetchPortfolio(), 24 * 60 * 60 * 1000);
     void (async () => {
       try {
         const res = await fetch("/api/cron/last-scan");
@@ -1097,7 +1287,7 @@ export default function Home() {
       const data = (await res.json()) as { synced: boolean; positions?: string[]; changes?: string[]; message?: string; error?: string };
       setIbkrSyncResult(data);
       if (data.synced) {
-        void fetchPortfolio();
+        void fetchPortfolio({ forceRefresh: true });
       }
     } catch (e) {
       setIbkrSyncResult({ synced: false, error: String(e) });
@@ -1197,7 +1387,7 @@ export default function Home() {
     setTickerHistoryError(null);
     setAiAnalyze(null);
     setChatInput("");
-    // Chat ajalugu säilib modal avamise vahel (ei tühjenda)
+    setChat([]);
 
     setTeesDraft(selectedPos?.tees ?? "");
     setTargetDraft(typeof selectedPos?.target === "number" ? selectedPos?.target : 0);
@@ -1205,10 +1395,15 @@ export default function Home() {
 
     void (async () => {
       try {
-        const [histRes, earnRes] = await Promise.all([
+        const [histRes, earnRes, aiHistRes] = await Promise.all([
           fetch(`/api/ticker-history?ticker=${encodeURIComponent(selectedTicker)}&period=${chartPeriod}`),
           fetch(`/api/ticker-earnings?ticker=${encodeURIComponent(selectedTicker)}`),
+          fetch(`/api/ai-history?ticker=${encodeURIComponent(selectedTicker)}&limit=80`),
         ]);
+        if (aiHistRes.ok) {
+          const rows = (await aiHistRes.json()) as AiHistoryRow[];
+          setChat(Array.isArray(rows) ? chatMessagesFromAiHistory(rows) : []);
+        }
         if (!histRes.ok) throw new Error(`HTTP ${histRes.status}`);
         const json = (await histRes.json()) as TickerHistoryResponse;
         setTickerHistory(json);
@@ -1379,7 +1574,7 @@ export default function Home() {
 
   return (
     <>
-      <style>{styles}</style>
+      <style suppressHydrationWarning>{styles}</style>
 
       <div className="app">
         {/* HEADER */}
@@ -1435,6 +1630,15 @@ export default function Home() {
               })()}
               <div className="btn primary" onClick={() => void handleScan()} role="button" tabIndex={0}>
                 {scanLabel}
+              </div>
+              <div
+                className="btn"
+                onClick={() => void fetchPortfolio({ forceRefresh: true })}
+                role="button"
+                tabIndex={0}
+                title="Käivitab taustal portfelli uuesti arvutamise (SQLite snapshot). Hetkel näed veel eelmist hetke kuni refresh valmis."
+              >
+                ⟳ Uuenda andmeid
               </div>
               <div className="btn" onClick={() => void handleIbkrSync()} role="button" tabIndex={0}>
                 {ibkrSyncLabel}
@@ -1501,13 +1705,26 @@ export default function Home() {
                 <span className="skel skel-short" style={{ width: 80 }} />
               ) : (
                 <>
-                  <span className={((portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "pos" : "neg")}>
-                    {(portfolioData.kpis?.dayChgEur ?? 0) >= 0 ? "+" : ""}€{(portfolioData.kpis?.dayChgEur ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}
-                  </span>
+                  €{(portfolioData.kpis?.portfolioTotal ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}
                   {" · "}
+                  <span className={((portfolioData.kpis?.dayChgPct ?? 0) >= 0 ? "pos" : "neg")}>
                   {((portfolioData.kpis?.dayChgPct ?? 0) >= 0 ? "+" : "")}
                   {(portfolioData.kpis?.dayChgPct ?? 0).toFixed(1)}% täna
+                  </span>
                 </>
+              )}
+            </div>
+            <div className="sub" style={{ marginTop: 2, fontSize: 10, color: "var(--t3)", lineHeight: 1.35 }}>
+              {portfolioLoading && !portfolioData.kpis ? (
+                <span className="skel skel-short" style={{ width: 200 }} />
+              ) : (portfolioData.kpis?.marginLoan ?? 0) > 0 ? (
+                <>
+                  Oma raha: ~€
+                  {Math.round(portfolioData.kpis?.netEquity ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })} · Margin: ~€
+                  {Math.round(portfolioData.kpis?.marginLoan ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}
+                </>
+              ) : (
+                <>Oma raha ≈ kogu portfell (margin määramata)</>
               )}
             </div>
           </div>
@@ -1527,6 +1744,16 @@ export default function Home() {
                 <span className="skel skel-short" style={{ width: 100 }} />
               ) : (
                 `${(portfolioData.kpis?.unrealizedPnlPct ?? 0) >= 0 ? "+" : ""}${(portfolioData.kpis?.unrealizedPnlPct ?? 0).toFixed(1)}% · kostbasis €${((portfolioData.kpis?.costBasisEur ?? 0) / 1000).toFixed(0)}K`
+              )}
+            </div>
+            <div className="sub" style={{ marginTop: 2, fontSize: 10, color: "var(--t3)" }}>
+              {portfolioLoading && !portfolioData.kpis ? (
+                <span className="skel skel-short" style={{ width: 140 }} />
+              ) : (
+                <>
+                  Realized P&L: {(portfolioData.kpis?.realizedPnl ?? 0) >= 0 ? "+" : ""}€
+                  {(portfolioData.kpis?.realizedPnl ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 0 })}
+                </>
               )}
             </div>
           </div>
@@ -1556,7 +1783,26 @@ export default function Home() {
                 portfolioData.kpis?.beta ?? "—"
               )}
             </div>
-            <div className="sub">Madalam turu vol · drawdown -22%</div>
+            <div className="sub">
+              {portfolioLoading && !portfolioData.kpis ? (
+                <span className="skel skel-short" style={{ width: 120 }} />
+              ) : portfolioData.kpis?.portfolioDrawdownPct === null ||
+                portfolioData.kpis?.portfolioDrawdownPct === undefined ? (
+                <>Madalam turu vol · drawdown —</>
+              ) : (
+                <>
+                  Madalam turu vol · drawdown{" "}
+                  <span
+                    className={
+                      (portfolioData.kpis!.portfolioDrawdownPct as number) >= 0 ? "pos" : "neg"
+                    }
+                  >
+                    {(portfolioData.kpis!.portfolioDrawdownPct as number) >= 0 ? "+" : ""}
+                    {(portfolioData.kpis!.portfolioDrawdownPct as number).toFixed(1)}%
+                  </span>
+                </>
+              )}
+            </div>
           </div>
           <div className="kpi">
             <div className="label">Sharpe ratio</div>
@@ -1578,23 +1824,47 @@ export default function Home() {
                 `${(portfolioData.kpis?.concentration ?? 0).toFixed(1)}%`
               )}
             </div>
-            <div className="sub">UK infra klaster · max 20% soov</div>
+            <div className="sub">Suurim sektor · max 20% soov</div>
           </div>
           <div className="kpi red">
             <div className="label">Tähelepanu</div>
-            <div className="val" style={{ color: "var(--red)" }}>
+            <button
+              type="button"
+              className="val"
+              style={{
+                color: "var(--red)",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 0,
+                font: "inherit",
+                textAlign: "left",
+              }}
+              title={portfolioData.kpis?.attentionSummary || "Scrolli hoiatuste juurde"}
+              onClick={() => document.getElementById("portfolio-alerts")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            >
               {portfolioLoading && !portfolioData.kpis ? (
                 <span className="skel skel-num" style={{ display: "inline-block", width: 24 }} />
               ) : (
-                Math.max(
-                  portfolioData.kpis?.attention ?? 0,
-                  lastScanUrgentCount + lastScanWarningCount + lastScanInfoCount
-                )
+                portfolioData.kpis?.attention ?? 0
+              )}
+            </button>
+            <div className="sub" title={portfolioData.kpis?.attentionSummary}>
+              {portfolioLoading && !portfolioData.kpis ? (
+                <span className="skel skel-short" style={{ width: 160 }} />
+              ) : (
+                <>
+                  {portfolioData.kpis?.attentionSell ?? 0} müü · {portfolioData.kpis?.attentionRsi ?? 0} RSI ·{" "}
+                  {portfolioData.kpis?.attentionTarget ?? 0} target
+                  {(portfolioData.kpis?.attentionStop ?? 0) > 0 ? ` · ${portfolioData.kpis?.attentionStop} stop` : ""}
+                </>
               )}
             </div>
-            <div className="sub">
-              {lastScanUrgentCount} müü · {lastScanWarningCount} RSI · {lastScanInfoCount} target
-            </div>
+            {portfolioData.kpis?.attentionSummary ? (
+              <div className="sub" style={{ marginTop: 2, fontSize: 9, color: "var(--t3)", lineHeight: 1.3 }}>
+                {portfolioData.kpis.attentionSummary}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -1603,7 +1873,7 @@ export default function Home() {
           {/* LEFT: ALERTS + TABLE */}
           <div className="main-content">
             {/* ALERTS */}
-            <div className="alerts">
+            <div className="alerts" id="portfolio-alerts">
               {alertsToRender.map((a) => {
                 const alertBtnClass =
                   a.buttonVariant === "danger"
@@ -1706,7 +1976,7 @@ export default function Home() {
                     <th className="cell-chart">4 näd</th>
                     <th className="cell-rsi">RSI · trendi</th>
                     <th className="cell-val">Valuatsioon</th>
-                    <th className="cell-div">Div %</th>
+                    <DividendColumnTh />
                   </tr>
                 </thead>
                 <tbody id="positions-body">
@@ -1751,7 +2021,7 @@ export default function Home() {
                             <div className="skel skel-pill" style={{ width: 60, marginTop: 4 }} />
                           </td>
                           <td className="cell-div">
-                            <div className="skel skel-short" style={{ width: 52 }} />
+                            <div className="skel skel-short" style={{ width: 64, height: 28 }} />
                           </td>
                         </tr>
                       ))
@@ -1868,15 +2138,14 @@ export default function Home() {
                         </td>
 
                         <td className="cell-div">
-                          <span
-                            style={{
-                              color: p.div >= 6 ? "var(--green)" : p.div >= 3 ? "var(--t1)" : "var(--t3)",
-                              fontFamily: "var(--font-mono)",
-                              fontWeight: 500,
-                            }}
-                          >
-                            {p.div > 0 ? `${p.div.toFixed(1)}%` : "—"}
-                          </span>
+                          <DividendBars
+                            payments={dividendMap[p.tk]?.payments ?? []}
+                            displayAvgAnnualYieldPct={dividendMap[p.tk]?.displayAvgAnnualYieldPct}
+                            avgAnnualYieldPct={dividendMap[p.tk]?.avgAnnualYieldPct ?? 0}
+                            analysis={dividendMap[p.tk]?.analysis}
+                            fallbackDivPct={p.div}
+                            ret={p.ret}
+                          />
                         </td>
                       </tr>
                     );
@@ -2073,7 +2342,7 @@ export default function Home() {
                       fontFamily: "var(--font-mono)",
                     }}
                   >
-                    Puuduvad andmed · cron skan täidab history.json
+                    Puuduvad andmed · SQLite snapshotid (refresh) või cron skan täidab history.json
                   </div>
                 )}
               </div>

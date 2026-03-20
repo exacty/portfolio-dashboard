@@ -1,80 +1,17 @@
 {
-  "portfolio_meta": {
-    "cash_invested_eur": 1200000,
-    "margin_used_eur": 900000
-  },
   "positions": {
-    "EQNR.OL": {
-      "avg_price": 250.3251,
-      "shares": 1000,
-      "currency": "NOK",
-      "tees": "Tugev energiaettevõte, hea dividend",
-      "target": 360,
-      "stop_loss": 200
-    },
-    "AKRBP.OL": {
-      "avg_price": 248.66477025,
-      "shares": 1200,
-      "currency": "NOK",
-      "tees": "Aker BP - Norra nafta, kõrge dividend.",
+    "NOVO-B.CO": {
+      "avg_price": 249.394635,
+      "shares": 2500,
+      "currency": "DKK",
+      "tees": "Novo Nordisk Ozempic kasv",
       "target": 0,
-      "stop_loss": 0
-    },
-    "VZ": {
-      "avg_price": 41.782887385,
-      "shares": 2600,
-      "currency": "USD",
-      "tees": "Verizon - stabiilne telecom dividend",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "O": {
-      "avg_price": 55.281227768,
-      "shares": 2100,
-      "currency": "USD",
-      "tees": "Realty Income - igakuine dividend REIT",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "UPM.HE": {
-      "avg_price": 22.643316,
-      "shares": 3000,
-      "currency": "EUR",
-      "tees": "UPM-Kymmene metsatööstus",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "AGNC": {
-      "avg_price": 9.535952137,
-      "shares": 10785,
-      "currency": "USD",
-      "tees": "Mortgage REIT, kõrge dividend",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "INPP.L": {
-      "avg_price": 1.270672799,
-      "shares": 79000,
-      "currency": "GBP",
-      "tees": "UK infrastruktuur, stabiilne dividend",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "SEQI.L": {
-      "avg_price": 0.782402719,
-      "shares": 128000,
-      "currency": "GBP",
-      "tees": "Sequoia infra dividend",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "HICL.L": {
-      "avg_price": 1.186505957,
-      "shares": 94000,
-      "currency": "GBP",
-      "tees": "HICL UK infrastruktuur",
-      "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 237.5,
+      "ibkr_unrealized_pnl": -3980,
+      "ibkr_market_value_eur": 79469,
+      "market_price": 237.5
     },
     "A8X.F": {
       "avg_price": 12.320552907,
@@ -82,71 +19,12 @@
       "currency": "EUR",
       "tees": "Fiskars tarbekaup",
       "target": 0,
-      "stop_loss": 0
-    },
-    "SUPR.L": {
-      "avg_price": 0.842188158,
-      "shares": 180000,
-      "currency": "GBP",
-      "tees": "UK toidupoe REIT",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "OXY": {
-      "avg_price": 79.944,
-      "shares": 2000,
-      "currency": "USD",
-      "tees": "Buffett positsioon, nafta",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "NOVO-B.CO": {
-      "avg_price": 249.394635,
-      "shares": 2500,
-      "currency": "DKK",
-      "tees": "Novo Nordisk Ozempic kasv",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "VICI": {
-      "avg_price": 29.20117,
-      "shares": 4000,
-      "currency": "USD",
-      "tees": "Casino REIT",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "TRIG.L": {
-      "avg_price": 0.6940385,
-      "shares": 120000,
-      "currency": "GBP",
-      "tees": "Taastuvenergia UK",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "LGEN.L": {
-      "avg_price": 2.594579551,
-      "shares": 49000,
-      "currency": "GBP",
-      "tees": "UK kindlustus, kõrge dividend",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "MSFT": {
-      "avg_price": 419.752483333,
-      "shares": 300,
-      "currency": "USD",
-      "tees": "Azure + AI kasv",
-      "target": 0,
-      "stop_loss": 0
-    },
-    "TLT": {
-      "avg_price": 98.361666667,
-      "shares": 600,
-      "currency": "USD",
-      "tees": "Intresside languse mäng",
-      "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 12.3,
+      "ibkr_unrealized_pnl": 310,
+      "ibkr_market_value_eur": 48372,
+      "market_price": 12.3
     },
     "IS04.L": {
       "avg_price": 3.18521181,
@@ -154,39 +32,116 @@
       "currency": "EUR",
       "tees": "Pikaajalised USA riigivõlakirjad",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 2.7448,
+      "ibkr_unrealized_pnl": -11010,
+      "ibkr_market_value_eur": 68620,
+      "market_price": 2.7448
     },
-    "IFN": {
-      "avg_price": 13.734562486,
-      "shares": 4377,
-      "currency": "USD",
-      "tees": "India kasvuturg",
+    "UPM.HE": {
+      "avg_price": 22.643316,
+      "shares": 3000,
+      "currency": "EUR",
+      "tees": "UPM-Kymmene metsatööstus",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 25.17,
+      "ibkr_unrealized_pnl": 7580,
+      "ibkr_market_value_eur": 75510,
+      "market_price": 25.17
     },
-    "ARCC": {
-      "avg_price": 21.425022,
-      "shares": 2400,
-      "currency": "USD",
-      "tees": "Suurim BDC, kõrge dividend",
+    "HICL.L": {
+      "avg_price": 1.186505957,
+      "shares": 94000,
+      "currency": "GBP",
+      "tees": "HICL UK infrastruktuur",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 1.184,
+      "ibkr_unrealized_pnl": -272,
+      "ibkr_market_value_eur": 128400,
+      "market_price": 1.184
     },
-    "IIPR": {
-      "avg_price": 64.326332998,
-      "shares": 1566,
-      "currency": "USD",
-      "tees": "Cannabis REIT",
+    "INPP.L": {
+      "avg_price": 1.270672799,
+      "shares": 79000,
+      "currency": "GBP",
+      "tees": "UK infrastruktuur, stabiilne dividend",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 1.274,
+      "ibkr_unrealized_pnl": 303,
+      "ibkr_market_value_eur": 116100,
+      "market_price": 1.274
     },
-    "FIG": {
-      "avg_price": 34.1968699,
-      "shares": 2000,
-      "currency": "USD",
-      "tees": "Figma design tarkvara",
+    "LGEN.L": {
+      "avg_price": 2.594579551,
+      "shares": 49000,
+      "currency": "GBP",
+      "tees": "UK kindlustus, kõrge dividend",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 2.363,
+      "ibkr_unrealized_pnl": -13094,
+      "ibkr_market_value_eur": 133600,
+      "market_price": 2.363
+    },
+    "SEQI.L": {
+      "avg_price": 0.782402719,
+      "shares": 128000,
+      "currency": "GBP",
+      "tees": "Sequoia infra dividend",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 0.798,
+      "ibkr_unrealized_pnl": 2304,
+      "ibkr_market_value_eur": 117900,
+      "market_price": 0.798
+    },
+    "SUPR.L": {
+      "avg_price": 0.842188158,
+      "shares": 180000,
+      "currency": "GBP",
+      "tees": "UK toidupoe REIT",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 0.812,
+      "ibkr_unrealized_pnl": -6270,
+      "ibkr_market_value_eur": 168700,
+      "market_price": 0.812
+    },
+    "TRIG.L": {
+      "avg_price": 0.6940385,
+      "shares": 120000,
+      "currency": "GBP",
+      "tees": "Taastuvenergia UK",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 0.682,
+      "ibkr_unrealized_pnl": -1667,
+      "ibkr_market_value_eur": 94435,
+      "market_price": 0.682
+    },
+    "AKRBP.OL": {
+      "avg_price": 248.66477025,
+      "shares": 1200,
+      "currency": "NOK",
+      "tees": "Aker BP - Norra nafta, kõrge dividend.",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 351.6,
+      "ibkr_unrealized_pnl": 11162,
+      "ibkr_market_value_eur": 38128,
+      "market_price": 351.6
     },
     "ADBE": {
       "avg_price": 363.660427,
@@ -194,23 +149,77 @@
       "currency": "USD",
       "tees": "Adobe creative monopol",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 249.0,
+      "ibkr_unrealized_pnl": -14863,
+      "ibkr_market_value_eur": 32278,
+      "market_price": 249.0
     },
-    "PYPL": {
-      "avg_price": 73.349725687,
-      "shares": 1600,
+    "AGNC": {
+      "avg_price": 9.535952137,
+      "shares": 10785,
       "currency": "USD",
-      "tees": "Fintech turnaround",
+      "tees": "Mortgage REIT, kõrge dividend",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 9.82,
+      "ibkr_unrealized_pnl": 3014,
+      "ibkr_market_value_eur": 91892,
+      "market_price": 9.82
     },
-    "SEVN": {
-      "avg_price": 13.832866544,
-      "shares": 8130,
+    "ARCC": {
+      "avg_price": 21.425022,
+      "shares": 2400,
       "currency": "USD",
-      "tees": "Kõrge dividend mREIT",
+      "tees": "Suurim BDC, kõrge dividend",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 18.18,
+      "ibkr_unrealized_pnl": -6979,
+      "ibkr_market_value_eur": 37457,
+      "market_price": 18.18
+    },
+    "FIG": {
+      "avg_price": 34.1968699,
+      "shares": 2000,
+      "currency": "USD",
+      "tees": "Figma design tarkvara",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 23.76,
+      "ibkr_unrealized_pnl": -17726,
+      "ibkr_market_value_eur": 41380,
+      "market_price": 23.76
+    },
+    "IFN": {
+      "avg_price": 13.734562486,
+      "shares": 4377,
+      "currency": "USD",
+      "tees": "India kasvuturg",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 11.34,
+      "ibkr_unrealized_pnl": -8717,
+      "ibkr_market_value_eur": 43235,
+      "market_price": 11.34
+    },
+    "IIPR": {
+      "avg_price": 64.326332998,
+      "shares": 1566,
+      "currency": "USD",
+      "tees": "Cannabis REIT",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 51.59,
+      "ibkr_unrealized_pnl": -15829,
+      "ibkr_market_value_eur": 71225,
+      "market_price": 51.59
     },
     "LEG": {
       "avg_price": 18.725858537,
@@ -218,7 +227,64 @@
       "currency": "USD",
       "tees": "Restruktureerimine",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 9.54,
+      "ibkr_unrealized_pnl": -32512,
+      "ibkr_market_value_eur": 33837,
+      "market_price": 9.54
+    },
+    "MSFT": {
+      "avg_price": 419.752483333,
+      "shares": 300,
+      "currency": "USD",
+      "tees": "Azure + AI kasv",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 384.0,
+      "ibkr_unrealized_pnl": -9295,
+      "ibkr_market_value_eur": 99529,
+      "market_price": 384.0
+    },
+    "O": {
+      "avg_price": 55.281227768,
+      "shares": 2100,
+      "currency": "USD",
+      "tees": "Realty Income - igakuine dividend REIT",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 61.01,
+      "ibkr_unrealized_pnl": 10524,
+      "ibkr_market_value_eur": 110800,
+      "market_price": 61.01
+    },
+    "PYPL": {
+      "avg_price": 73.349725687,
+      "shares": 1600,
+      "currency": "USD",
+      "tees": "Fintech turnaround",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 44.21,
+      "ibkr_unrealized_pnl": -40098,
+      "ibkr_market_value_eur": 61323,
+      "market_price": 44.21
+    },
+    "SEVN": {
+      "avg_price": 13.832866544,
+      "shares": 8130,
+      "currency": "USD",
+      "tees": "Kõrge dividend mREIT",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 8.22,
+      "ibkr_unrealized_pnl": -39365,
+      "ibkr_market_value_eur": 57823,
+      "market_price": 8.22
     },
     "TIRXF": {
       "avg_price": 0.112259486,
@@ -226,7 +292,65 @@
       "currency": "USD",
       "tees": "Spekulatiivne",
       "target": 0,
-      "stop_loss": 0
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 0.003,
+      "ibkr_unrealized_pnl": -10386,
+      "ibkr_market_value_eur": 285,
+      "market_price": 0.003
+    },
+    "TLT": {
+      "avg_price": 98.361666667,
+      "shares": 600,
+      "currency": "USD",
+      "tees": "Intresside languse mäng",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 86.2,
+      "ibkr_unrealized_pnl": -6311,
+      "ibkr_market_value_eur": 44691,
+      "market_price": 86.2
+    },
+    "VICI": {
+      "avg_price": 29.20117,
+      "shares": 4000,
+      "currency": "USD",
+      "tees": "Casino REIT",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 27.12,
+      "ibkr_unrealized_pnl": -7402,
+      "ibkr_market_value_eur": 93540,
+      "market_price": 27.12
+    },
+    "VZ": {
+      "avg_price": 41.782887385,
+      "shares": 2600,
+      "currency": "USD",
+      "tees": "Verizon - stabiilne telecom dividend",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 50.14,
+      "ibkr_unrealized_pnl": 18822,
+      "ibkr_market_value_eur": 112700,
+      "market_price": 50.14
+    },
+    "OXY": {
+      "avg_price": 79.944,
+      "shares": 2000,
+      "currency": "USD",
+      "tees": "Buffett positsioon, nafta",
+      "target": 0,
+      "stop_loss": 0,
+      "source": "ibkr",
+      "ibkr_mark_price": 78.59,
+      "ibkr_unrealized_pnl": -24,
+      "ibkr_market_value_eur": 1358,
+      "market_price": 78.59,
+      "instrument_type": "bond"
     }
   },
   "fx_rates": {
@@ -235,5 +359,51 @@
     "GBP": 1.1577,
     "USD": 0.87325,
     "EUR": 1
+  },
+  "portfolio_meta": {
+    "margin_loan": 926181,
+    "net_liquidation": 1153577,
+    "market_value_eur": 2079758.14,
+    "unrealized_pnl_eur": -274646,
+    "realized_pnl_eur": 0,
+    "day_pnl_eur": -34327,
+    "day_pnl_pct": -2.89,
+    "excess_liquidity_eur": 667866.54,
+    "maintenance_margin_eur": 485710.52,
+    "total_cash_eur": -930000,
+    "stock_unrealized_pnl_eur": -190366,
+    "option_unrealized_pnl_eur": -84280,
+    "option_positions": [
+      {
+        "ticker": "TLT CALL",
+        "underlying": "TLT",
+        "instrument_type": "option",
+        "last": 4.7,
+        "currency": "USD",
+        "contracts": 175,
+        "market_value_eur": 70626,
+        "unrealized_pnl_eur": -44569
+      },
+      {
+        "ticker": "TLT Rev",
+        "underlying": "TLT",
+        "instrument_type": "option",
+        "last": null,
+        "currency": "USD",
+        "contracts": 1,
+        "market_value_eur": -1124,
+        "unrealized_pnl_eur": -440
+      },
+      {
+        "ticker": "TLT CALL2",
+        "underlying": "TLT",
+        "instrument_type": "option",
+        "last": 0.8,
+        "currency": "USD",
+        "contracts": 90,
+        "market_value_eur": 6222,
+        "unrealized_pnl_eur": -39271
+      }
+    ]
   }
 }

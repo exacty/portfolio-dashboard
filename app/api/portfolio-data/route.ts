@@ -1,3 +1,7 @@
+/**
+ * Legacy: `/positions` lehe toimetamine loeb/kirjutab `portfolio_data.json`.
+ * Peamine dashboard kasutab SQLite + `/api/portfolio`. Tulevikus: sama kuju andmed DB-st.
+ */
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import path from "node:path";
-import fs from "node:fs/promises";
 import { promisify } from "node:util";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -18,8 +17,10 @@ let cachedPortfolio: { fetchedAt: number; data: PortfolioJson } | null = null;
 
 const execFileAsync = promisify(execFile);
 
-async function runPortfolioEngine(): Promise<PortfolioJson> {
-  const scriptPath = path.join(process.cwd(), "scripts", "portfolio_engine.py");
+const MAX_AI_LOG_CHARS = 80_000;
+
+async function runDbReader(): Promise<PortfolioJson> {
+  const scriptPath = path.join(process.cwd(), "scripts", "db_reader.py");
   const result = (await execFileAsync("python3", [scriptPath], {
     maxBuffer: 1024 * 1024 * 30,
     cwd: process.cwd(),
@@ -29,37 +30,52 @@ async function runPortfolioEngine(): Promise<PortfolioJson> {
   return JSON.parse(result.stdout) as unknown as PortfolioJson;
 }
 
+function truncateForAiLog(p: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...p };
+  for (const k of Object.keys(out)) {
+    const v = out[k];
+    if (typeof v === "string" && v.length > MAX_AI_LOG_CHARS) {
+      out[k] = `${v.slice(0, MAX_AI_LOG_CHARS)}…`;
+    }
+  }
+  return out;
+}
+
+/** Fire-and-forget: persist AI exchange to SQLite ai_analyses */
+function logAiEvent(ticker: string | undefined, action: string, payload: Record<string, unknown>): void {
+  try {
+    const script = path.join(process.cwd(), "scripts", "append_ai_log.py");
+    const child = spawn("python3", [script], {
+      cwd: process.cwd(),
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const body = JSON.stringify({
+      ticker: ticker ?? null,
+      action,
+      payload: truncateForAiLog(payload),
+    });
+    child.stdin.write(body);
+    child.stdin.end();
+  } catch {
+    /* ignore logging failures */
+  }
+}
+
 async function getPortfolioCached(): Promise<PortfolioJson> {
   const now = Date.now();
   if (cachedPortfolio && now - cachedPortfolio.fetchedAt < CACHE_MS) return cachedPortfolio.data;
 
   try {
-    const raw = await fs.readFile(CACHE_PATH, "utf-8");
-    const data = JSON.parse(raw) as PortfolioJson;
+    const data = await runDbReader();
     cachedPortfolio = { fetchedAt: now, data };
     return data;
-  } catch {
-    try {
-      const data = await runPortfolioEngine();
-      cachedPortfolio = { fetchedAt: now, data };
-      return data;
-    } catch {
-      return {};
-    }
-  }
-}
-
-async function readPortfolioData(): Promise<Record<string, unknown>> {
-  try {
-    const raw = await fs.readFile(PORTFOLIO_DATA_PATH, "utf-8");
-    const json = JSON.parse(raw) as { positions?: Record<string, unknown> };
-    return json.positions ?? {};
   } catch {
     return {};
   }
 }
 
-function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<string, unknown>): string {
+/** Kontekst ainult SQLite snapshotist (target/stop/tees juba positsioonis pärast refresh). */
+function buildPortfolioContext(portfolio: PortfolioJson): string {
   try {
     const parts: string[] = [];
     const port = portfolio ?? {};
@@ -95,16 +111,12 @@ function buildPortfolioContext(portfolio: PortfolioJson, portfolioData: Record<s
       const target = Number(p.target ?? 0);
       const stopLoss = Number(p.stop_loss ?? 0);
       const tees = String(p.tees ?? "");
-      const meta = portfolioData[tk] as Record<string, unknown> | undefined;
-      const metaTarget = meta ? Number(meta.target ?? 0) : target;
-      const metaStop = meta ? Number(meta.stop_loss ?? 0) : stopLoss;
-      const metaTees = meta ? String(meta.tees ?? "") : tees;
 
       parts.push(
         `- **${tk}** (${name}): ${price.toFixed(2)} ${cur} | €${eur.toLocaleString("de-DE", { maximumFractionDigits: 0 })} (${pct.toFixed(1)}%) | ret ${ret >= 0 ? "+" : ""}${ret.toFixed(1)}% | skoor ${score} | RSI ${rsi} | sigs [${sigs.join(", ")}]`
       );
-      if (metaTarget > 0 || metaStop > 0 || (metaTees && metaTees.trim())) {
-        parts.push(`  Target: ${metaTarget > 0 ? metaTarget : "—"} | Stop: ${metaStop > 0 ? metaStop : "—"} | Tees: ${metaTees || "—"}`);
+      if (target > 0 || stopLoss > 0 || (tees && tees.trim())) {
+        parts.push(`  Target: ${target > 0 ? target : "—"} | Stop: ${stopLoss > 0 ? stopLoss : "—"} | Tees: ${tees || "—"}`);
       }
     }
     parts.push("");
@@ -263,8 +275,7 @@ export async function POST(req: Request) {
 
     const anthropic = new Anthropic({ apiKey });
     const portfolio = await getPortfolioCached();
-    const portfolioData = await readPortfolioData();
-    const portfolioContext = buildPortfolioContext(portfolio, portfolioData);
+    const portfolioContext = buildPortfolioContext(portfolio);
     const systemPrompt = ALPHA_SYSTEM_PROMPT.replace("{portfolio_context}", portfolioContext);
 
     if (body.action === "portfolio_chat") {
@@ -281,6 +292,7 @@ export async function POST(req: Request) {
       });
 
       const text = completion.content?.[0]?.type === "text" ? completion.content[0].text : "";
+      logAiEvent(undefined, "portfolio_chat", { replyHtml: text });
       return NextResponse.json({ replyHtml: text });
     }
 
@@ -328,6 +340,11 @@ export async function POST(req: Request) {
       if (!parsed) {
         return NextResponse.json({ error: "AI returned non-JSON", raw: text }, { status: 500 });
       }
+      const scan = parsed as { alerts?: unknown[]; positionUpdates?: Record<string, unknown> };
+      logAiEvent(undefined, "scan", {
+        alertsCount: Array.isArray(scan.alerts) ? scan.alerts.length : 0,
+        positionUpdatesCount: scan.positionUpdates ? Object.keys(scan.positionUpdates).length : 0,
+      });
       return NextResponse.json(parsed);
     }
 
@@ -377,7 +394,7 @@ export async function POST(req: Request) {
       const text = completion.content?.[0]?.type === "text" ? completion.content[0].text : "";
       const parsed = extractJson(text);
       if (!parsed) {
-        return NextResponse.json({
+        const fallback = {
           ticker,
           signal: "HOIA",
           score: 50,
@@ -386,8 +403,11 @@ export async function POST(req: Request) {
           sigs: [],
           sigT: ["w", "w", "w"],
           rationaleHtml: `<p>${text || "AI ei tagastanud struktureeritud vastust."}</p>`,
-        });
+        };
+        logAiEvent(ticker, "analyze", fallback as unknown as Record<string, unknown>);
+        return NextResponse.json(fallback);
       }
+      logAiEvent(ticker, "analyze", parsed as Record<string, unknown>);
       return NextResponse.json(parsed);
     }
 
@@ -417,6 +437,7 @@ export async function POST(req: Request) {
         impact: "unknown",
         recommendation: text,
       };
+      logAiEvent(body.ticker, "news_analysis", result as Record<string, unknown>);
       return NextResponse.json(result);
     }
 
@@ -431,6 +452,8 @@ export async function POST(req: Request) {
       const ticker = body.ticker;
       const positions = Array.isArray(portfolio["positions"]) ? (portfolio["positions"] as Array<{ tk: string; [key: string]: unknown }>) : [];
       const position = positions.find((p) => p.tk === ticker);
+
+      logAiEvent(ticker, "chat_user", { message: body.message });
 
       const completion = await anthropic.messages.create({
         model: MODEL,
@@ -456,8 +479,10 @@ export async function POST(req: Request) {
       const text = completion.content?.[0]?.type === "text" ? completion.content[0].text : "";
       const parsed = extractJson(text);
       if (!parsed) {
+        logAiEvent(ticker, "chat", { replyHtml: text });
         return NextResponse.json({ replyHtml: text || "AI ei tagastanud vastust." });
       }
+      logAiEvent(ticker, "chat", parsed as Record<string, unknown>);
       return NextResponse.json(parsed);
     }
 

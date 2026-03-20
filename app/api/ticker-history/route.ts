@@ -19,19 +19,19 @@ type TickerHistoryResponse = {
 };
 
 const execFileAsync = promisify(execFile);
-const CACHE_MS = 5 * 60 * 1000;
-let cached: { fetchedAt: number; data: Record<string, TickerHistoryResponse> } | null = null;
 
-function cacheKey(ticker: string, range: string) {
-  return `${ticker}:${range}`;
-}
-
-async function runHistory(ticker: string, range: string): Promise<TickerHistoryResponse> {
-  const scriptPath = path.join(process.cwd(), "scripts", "portfolio_engine.py");
-  const result = (await execFileAsync("python3", [scriptPath, "--history", "--ticker", ticker, "--range", range], {
-    maxBuffer: 1024 * 1024 * 60,
+async function runCachedHistory(ticker: string, range: string, forceRefresh: boolean): Promise<TickerHistoryResponse> {
+  const scriptPath = path.join(process.cwd(), "scripts", "market_data_fetch.py");
+  const env = { ...process.env };
+  if (forceRefresh) {
+    env.FORCE_MARKET_REFRESH = "1";
+  }
+  const result = (await execFileAsync("python3", [scriptPath, "history", ticker, range], {
     cwd: process.cwd(),
+    maxBuffer: 1024 * 1024 * 60,
     encoding: "utf8",
+    env,
+    shell: false,
   })) as { stdout: string; stderr: string };
 
   return JSON.parse(result.stdout) as TickerHistoryResponse;
@@ -58,22 +58,17 @@ export async function GET(req: Request) {
     const ticker = url.searchParams.get("ticker") ?? "";
     const periodParam = url.searchParams.get("period") ?? url.searchParams.get("range") ?? "1y";
     const range = PERIOD_TO_RANGE[periodParam] ?? periodParam;
+    const forceRefresh =
+      url.searchParams.get("refresh") === "1" ||
+      url.searchParams.get("force") === "1" ||
+      url.searchParams.get("nocache") === "1";
     if (!ticker) return NextResponse.json({ error: "Missing ticker" }, { status: 400 });
 
-    const now = Date.now();
-    const key = cacheKey(ticker, range);
-    if (cached && now - cached.fetchedAt < CACHE_MS && cached.data[key]) {
-      return NextResponse.json(cached.data[key]);
-    }
-
-    const data = await runHistory(ticker, range);
-    if (!cached) cached = { fetchedAt: now, data: { [key]: data } };
-    else {
-      cached = { fetchedAt: now, data: { ...cached.data, [key]: data } };
-    }
-    return NextResponse.json(data);
+    const data = await runCachedHistory(ticker, range, forceRefresh);
+    const res = NextResponse.json(data);
+    res.headers.set("X-Market-Data-Store", "sqlite");
+    return res;
   } catch (e) {
     return NextResponse.json({ error: "Failed to load ticker history", detail: String(e) }, { status: 500 });
   }
 }
-

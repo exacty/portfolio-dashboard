@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { parseStringPromise } from "xml2js";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const IBKR_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService";
 const WAIT_MS = 7000;
@@ -74,7 +78,75 @@ function resolveYfTicker(ibkrSymbol: string): string {
   return ibkrSymbol.trim().toUpperCase();
 }
 
-async function parseFlexXml(xml: string): Promise<{ positions: IbkrPosition[]; fxRates: IbkrFxRates }> {
+function collectNetLiquidationNodes(obj: unknown): Array<{ value: number; currency: string }> {
+  const out: Array<{ value: number; currency: string }> = [];
+  const visit = (x: unknown): void => {
+    if (!x || typeof x !== "object") return;
+    if (Array.isArray(x)) {
+      for (const it of x) visit(it);
+      return;
+    }
+    const o = x as Record<string, unknown>;
+
+    // Common IBKR Flex shape: attributes merged onto the current node
+    // like { currency: "EUR", netLiquidation: "123456.78" }.
+    const ownValue = extractNumber(o.netliquidation);
+    if (ownValue > 0) {
+      const ownCurrency =
+        extractText(o.currency ?? o.basecurrency ?? o.reportcurrency).toUpperCase() || "EUR";
+      out.push({ value: ownValue, currency: ownCurrency });
+    }
+
+    const raw = o.netliquidation;
+    const items =
+      raw != null && typeof raw === "object" ? (Array.isArray(raw) ? raw : [raw]) : [];
+    for (const item of items) {
+      const p = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      const value = extractNumber(p.value ?? item);
+      const currency =
+        extractText(p.currency ?? p.basecurrency ?? p.reportcurrency ?? o.currency).toUpperCase() || "EUR";
+      if (value > 0) out.push({ value, currency });
+    }
+    for (const v of Object.values(o)) visit(v);
+  };
+  visit(obj);
+  return out;
+}
+
+function pickNetLiquidation(
+  entries: Array<{ value: number; currency: string }>
+): { value: number; currency: string } | undefined {
+  if (!entries.length) return undefined;
+  const eur = entries.find((e) => e.currency === "EUR" || e.currency === "BASE_SUMMARY");
+  return eur ?? entries[entries.length - 1];
+}
+
+function toEur(amount: number, currency: string, fx: IbkrFxRates & Record<string, number>): number | null {
+  const cur = currency.toUpperCase();
+  if (cur === "EUR") return amount;
+  const r = fx[cur];
+  if (typeof r === "number" && r > 0) return amount * r;
+  return null;
+}
+
+function sumPositionsGrossEur(
+  positions: IbkrPosition[],
+  fx: IbkrFxRates & Record<string, number>
+): number {
+  let s = 0;
+  for (const p of positions) {
+    const mv = p.quantity * p.marketPrice;
+    const eur = toEur(mv, p.currency, fx);
+    if (eur != null && eur > 0) s += eur;
+  }
+  return s;
+}
+
+async function parseFlexXml(xml: string): Promise<{
+  positions: IbkrPosition[];
+  fxRates: IbkrFxRates;
+  netLiquidationCandidates: Array<{ value: number; currency: string }>;
+}> {
   const parsed = await parseStringPromise(xml, {
     explicitArray: false,
     ignoreAttrs: false,
@@ -170,7 +242,8 @@ async function parseFlexXml(xml: string): Promise<{ positions: IbkrPosition[]; f
   }
 
   walk(parsed);
-  return { positions, fxRates };
+  const netLiquidationCandidates = collectNetLiquidationNodes(parsed);
+  return { positions, fxRates, netLiquidationCandidates };
 }
 
 export async function GET() {
@@ -225,12 +298,14 @@ export async function GET() {
       );
     }
 
-    const { positions: ibkrPositions, fxRates: ibkrFxRates } = await parseFlexXml(statementXml);
+    const { positions: ibkrPositions, fxRates: ibkrFxRates, netLiquidationCandidates } =
+      await parseFlexXml(statementXml);
 
     const dataPath = path.join(process.cwd(), "portfolio_data.json");
     let existing: {
       positions: Record<string, { avg_price: number; shares: number; currency: string; tees?: string; target?: number; stop_loss?: number; source?: string }>;
       fx_rates?: Record<string, number>;
+      portfolio_meta?: { margin_loan?: number; [key: string]: unknown };
     } = { positions: {} };
     try {
       const raw = await fs.readFile(dataPath, "utf-8");
@@ -297,16 +372,53 @@ export async function GET() {
       ...(Object.keys(ibkrFxRates).length > 0 ? ibkrFxRates : existing.fx_rates ?? {}),
     };
 
-    const output = { positions: mergedPositions, fx_rates };
+    const nlPick = pickNetLiquidation(netLiquidationCandidates);
+    const netLiqEur =
+      nlPick != null ? toEur(nlPick.value, nlPick.currency, fx_rates as IbkrFxRates & Record<string, number>) : null;
+    const positionsGrossEur = sumPositionsGrossEur(ibkrPositions, fx_rates as IbkrFxRates & Record<string, number>);
+    const marginFromIbkr =
+      netLiqEur != null && netLiqEur > 0 && positionsGrossEur > 0
+        ? Math.max(0, Math.round(positionsGrossEur - netLiqEur))
+        : undefined;
+
+    const portfolio_meta = {
+      ...(existing.portfolio_meta ?? {}),
+      ...(marginFromIbkr !== undefined ? { margin_loan: marginFromIbkr } : {}),
+    };
+
+    const output = { positions: mergedPositions, fx_rates, portfolio_meta };
 
     await fs.writeFile(dataPath, JSON.stringify(output, null, 2), "utf-8");
 
+    /** Dashboard loeb positsioonid SQLite’ist; ilma selle sammuta jäävad müüdud tickerid (nt EQNR) DB-sse. */
+    let sqliteSynced = false;
+    try {
+      const migrateScript = path.join(process.cwd(), "scripts", "migrate.py");
+      await execFileAsync("python3", [migrateScript, "--skip-engine"], {
+        cwd: process.cwd(),
+        maxBuffer: 1024 * 1024,
+        encoding: "utf8",
+      });
+      sqliteSynced = true;
+    } catch (e) {
+      console.error("[ibkr-sync] SQLite sync (migrate.py --skip-engine) failed:", e);
+      changes.push(
+        "HOIATUS: SQLite positsioonid ei uuendunud — käivita käsitsi: python3 scripts/migrate.py --skip-engine"
+      );
+    }
+
     return NextResponse.json({
       synced: true,
+      sqliteSynced,
       positions: Object.keys(updatedFromIbkr),
       changes,
       fxRates: fx_rates,
-      message: `Synced ${Object.keys(updatedFromIbkr).length} positions`,
+      marginLoan: marginFromIbkr ?? existing.portfolio_meta?.margin_loan ?? null,
+      ibkrNetLiquidationEur: netLiqEur,
+      ibkrPositionsGrossEur: positionsGrossEur > 0 ? Math.round(positionsGrossEur) : null,
+      message: `Synced ${Object.keys(updatedFromIbkr).length} positions${sqliteSynced ? " (+ SQLite)" : ""}${
+        marginFromIbkr !== undefined ? " (+ margin)" : ""
+      }`,
     });
   } catch (err) {
     console.error("[ibkr-sync] Error:", err);

@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import path from "node:path";
-import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 
 export const runtime = "nodejs";
@@ -10,12 +8,11 @@ export const runtime = "nodejs";
 type PortfolioJson = Record<string, unknown>;
 
 const CACHE_MS = 5 * 60 * 1000;
-const CACHE_PATH = path.join(process.cwd(), "scripts", ".cache", "portfolio_cache.json");
 
 const execFileAsync = promisify(execFile);
 
-async function runPortfolioEngine(): Promise<PortfolioJson> {
-  const scriptPath = path.join(process.cwd(), "scripts", "portfolio_engine.py");
+async function runDbReader(): Promise<PortfolioJson> {
+  const scriptPath = path.join(process.cwd(), "scripts", "db_reader.py");
   const result = (await execFileAsync("python3", [scriptPath], {
     maxBuffer: 1024 * 1024 * 20,
     cwd: process.cwd(),
@@ -26,53 +23,43 @@ async function runPortfolioEngine(): Promise<PortfolioJson> {
 }
 
 function spawnBackgroundRefresh(): void {
-  const scriptPath = path.join(process.cwd(), "scripts", "portfolio_engine.py");
-  const child = execFile(
-    "python3",
-    [scriptPath],
-    { cwd: process.cwd(), maxBuffer: 1024 * 1024 * 20,
-      encoding: "utf8",
-    },
-    () => {
-      // Done; cache file updated by engine
-    }
-  );
+  const scriptPath = path.join(process.cwd(), "scripts", "refresh_portfolio.py");
+  const child = execFile("python3", [scriptPath], {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024 * 20,
+    encoding: "utf8",
+  });
   child.unref();
 }
 
-export async function GET() {
+function snapshotAgeMs(data: PortfolioJson): number {
+  const g = data.generatedAt;
+  if (typeof g !== "string") return Number.POSITIVE_INFINITY;
+  const t = Date.parse(g);
+  if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
+  return Date.now() - t;
+}
+
+export async function GET(req: Request) {
   try {
-    const now = Date.now();
-    const cacheExists = existsSync(CACHE_PATH);
-    console.log("[portfolio] Cache exists:", cacheExists);
+    const url = new URL(req.url);
+    const forceRefresh =
+      url.searchParams.get("refresh") === "1" ||
+      url.searchParams.get("force") === "1" ||
+      url.searchParams.get("nocache") === "1";
 
-    let cached: PortfolioJson;
-    let cacheAgeMs = 0;
+    const data = await runDbReader();
+    const age = snapshotAgeMs(data);
+    const ageSec = Math.round(age / 1000);
+    console.log("[portfolio] SQLite snapshot age:", ageSec, "seconds");
 
-    try {
-      const raw = await fs.readFile(CACHE_PATH, "utf-8");
-      cached = JSON.parse(raw) as PortfolioJson;
-      const stat = await fs.stat(CACHE_PATH);
-      cacheAgeMs = now - (stat.mtimeMs ?? stat.mtime.getTime());
-      const cacheAgeSec = Math.round(cacheAgeMs / 1000);
-      console.log("[portfolio] Cache age:", cacheAgeSec, "seconds");
-    } catch {
-      console.log("[portfolio] No cache or read failed, running engine...");
-      const data = await runPortfolioEngine();
-      const res = NextResponse.json(data);
-      res.headers.set("X-Cache-Age", "0");
-      return res;
+    if (forceRefresh || age >= CACHE_MS) {
+      spawnBackgroundRefresh();
     }
 
-    if (cacheAgeMs < CACHE_MS) {
-      const res = NextResponse.json(cached);
-      res.headers.set("X-Cache-Age", String(Math.round(cacheAgeMs / 1000)));
-      return res;
-    }
-
-    spawnBackgroundRefresh();
-    const res = NextResponse.json(cached);
-    res.headers.set("X-Cache-Age", String(Math.round(cacheAgeMs / 1000)));
+    const res = NextResponse.json(data);
+    res.headers.set("X-Cache-Age", String(Number.isFinite(age) ? ageSec : 0));
+    res.headers.set("X-Portfolio-Source", "sqlite");
     return res;
   } catch (e) {
     return NextResponse.json(
@@ -92,32 +79,58 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing ticker" }, { status: 400 });
     }
 
-    const filePath = path.join(process.cwd(), "portfolio_data.json");
-    type PositionEntry = { target?: number; stop_loss?: number; [key: string]: unknown };
-    type PortfolioDataFile = { positions?: Record<string, PositionEntry> };
-
-    const raw = await fs.readFile(filePath, "utf-8");
-    const json = JSON.parse(raw) as PortfolioDataFile;
-    json.positions ??= {};
-
-    const pos = json.positions[body.ticker];
-    if (!pos) {
-      return NextResponse.json({ error: "Ticker not found in portfolio_data.json" }, { status: 404 });
+    const payload: Record<string, number | string> = {};
+    if (typeof body.target === "number") payload.target = body.target;
+    if (typeof body.stop_loss === "number") payload.stop_loss = body.stop_loss;
+    if (typeof body.tees === "string") payload.tees = body.tees;
+    if (Object.keys(payload).length === 0) {
+      return NextResponse.json({ error: "No fields to update (target, stop_loss, tees)" }, { status: 400 });
     }
 
-    if (typeof body.target === "number") pos.target = body.target;
-    if (typeof body.stop_loss === "number") pos.stop_loss = body.stop_loss;
-    if (typeof body.tees === "string") pos.tees = body.tees;
+    const scriptPath = path.join(process.cwd(), "scripts", "update_position_overrides.py");
+    const result = (await execFileAsync("python3", [scriptPath, body.ticker, JSON.stringify(payload)], {
+      maxBuffer: 1024 * 1024,
+      cwd: process.cwd(),
+      encoding: "utf8",
+    })) as { stdout: string; stderr: string };
 
-    await fs.writeFile(filePath, JSON.stringify(json, null, 2), "utf-8");
-
+    let parsed: { ok?: boolean; error?: string; ticker?: string; target?: number; stop_loss?: number; tees?: string };
     try {
-      await fs.unlink(CACHE_PATH);
+      parsed = JSON.parse((result.stdout || "").trim()) as typeof parsed;
     } catch {
-      // ignore
+      return NextResponse.json(
+        { error: "Update script returned invalid JSON", detail: result.stderr || result.stdout },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ ok: true, updated: { ticker: body.ticker, target: pos.target, stop_loss: pos.stop_loss } });
+    if (!parsed.ok) {
+      if (parsed.error === "not_found") {
+        return NextResponse.json(
+          {
+            error: "Ticker not found in SQLite positions",
+            hint: "Run: python3 scripts/migrate.py (imports portfolio_data.json into data/portfolio.db)",
+          },
+          { status: 404 }
+        );
+      }
+      if (parsed.error === "no_fields") {
+        return NextResponse.json({ error: "No fields to update" }, { status: 400 });
+      }
+      return NextResponse.json({ error: "Update failed", detail: parsed.error ?? result.stderr }, { status: 500 });
+    }
+
+    spawnBackgroundRefresh();
+
+    return NextResponse.json({
+      ok: true,
+      updated: {
+        ticker: parsed.ticker ?? body.ticker,
+        target: parsed.target,
+        stop_loss: parsed.stop_loss,
+        tees: parsed.tees,
+      },
+    });
   } catch (e) {
     return NextResponse.json(
       { error: "Failed to update portfolio", detail: String(e) },

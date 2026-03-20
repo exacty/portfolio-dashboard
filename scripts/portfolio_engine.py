@@ -3,10 +3,11 @@ import os
 import math
 import datetime as dt
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -34,34 +35,46 @@ def _safe_scalar(ser: pd.Series, idx: int) -> float:
     return float(val.item()) if hasattr(val, "item") else float(val)
 
 
-# All positions from portfolio_data.json are used; no ticker limit.
+# Positions: SQLite (if any rows after migrate) else portfolio_data.json; no FRONTEND_TICKERS limit.
 
-CORR_FRONTEND_TICKERS: List[str] = ["TRIG", "SEQI", "HICL", "INPP", "SUPR", "LGEN"]
-
-GBX_PENNY_TICKERS: List[str] = ["INPP.L", "SEQI.L", "HICL.L", "SUPR.L", "TRIG.L", "LGEN.L", "IS04.L"]
+GBX_PENNY_TICKERS: List[str] = ["INPP.L", "SEQI.L", "HICL.L", "SUPR.L", "TRIG.L", "LGEN.L"]
 GBX_TO_EUR_DIVISOR = 100.0  # pence -> pounds
+EUR_DOT_L_TICKERS: Set[str] = {"IS04.L"}
 
 # Data reconciliation metadata (used for explaining which source was chosen).
 # Output shape: { [ticker]: { chosenSource: str, lastMedian: float, candidates: [...] } }
 DATA_QUALITY: Dict[str, Any] = {}
 
-# Portfolio sector mapping for sidebar "Sektori jaotus"
-TICKER_TO_SECTOR: Dict[str, str] = {
+try:
+    from database import compute_drawdown_pct_from_snapshots, compute_realized_pnl_eur_from_trades
+
+    _DB_KPI_EXTRAS = True
+except Exception:
+    compute_drawdown_pct_from_snapshots = None  # type: ignore
+    compute_realized_pnl_eur_from_trades = None  # type: ignore
+    _DB_KPI_EXTRAS = False
+
+# Dividend sanity: bond / accrual names → 0% (ei traditsioonilist div-i)
+DIV_YIELD_FORCE_ZERO_TICKERS = frozenset({"IS04.L"})
+
+# Sidebar "Sektori jaotus": portfolio EUR weights by sector (not ETF tickers).
+SECTOR_MAP: Dict[str, str] = {
     "EQNR.OL": "Energia",
     "AKRBP.OL": "Energia",
     "OXY": "Energia",
     "VZ": "Telecom",
-    "O": "USA REITid",
-    "VICI": "USA REITid",
-    "IIPR": "USA REITid",
-    "AGNC": "USA REITid",
-    "SEVN": "USA REITid",
-    "INPP.L": "UK Infrastr",
-    "SEQI.L": "UK Infrastr",
-    "HICL.L": "UK Infrastr",
-    "TRIG.L": "UK Infrastr",
-    "SUPR.L": "UK Infrastr",
+    "O": "REIT",
+    "VICI": "REIT",
+    "IIPR": "REIT",
+    "AGNC": "REIT",
+    "SEVN": "REIT",
+    "INPP.L": "UK Infra",
+    "SEQI.L": "UK Infra",
+    "HICL.L": "UK Infra",
+    "TRIG.L": "UK Infra",
+    "SUPR.L": "UK Infra",
     "LGEN.L": "UK Finants",
+    "ARCC": "BDC/Finants",
     "MSFT": "Tehnoloogia",
     "ADBE": "Tehnoloogia",
     "FIG": "Tehnoloogia",
@@ -69,13 +82,12 @@ TICKER_TO_SECTOR: Dict[str, str] = {
     "NOVO-B.CO": "Tervishoid",
     "TLT": "Võlakirjad",
     "IS04.L": "Võlakirjad",
-    "ARCC": "BDC",
     "UPM.HE": "Materjalid",
     "A8X.F": "Tarbekaubad",
     "IFN": "Arenevad turud",
     "LEG": "Tööstus",
+    "TIRXF": "Spekulatiivne",
 }
-# Fallback for unmapped tickers
 DEFAULT_SECTOR = "Muu"
 
 SECTOR_ETFS: List[str] = [
@@ -127,15 +139,25 @@ def _mkt_from_ticker(tk: str) -> str:
     return "us"
 
 
-def _cur_from_ticker(tk: str, portfolio_positions: Dict[str, Any]) -> str:
+def _is_london_pence_ticker(tk: str, pos_data: Optional[Dict[str, Any]] = None) -> bool:
+    if tk in EUR_DOT_L_TICKERS:
+        return False
     if tk in GBX_PENNY_TICKERS:
-        return portfolio_positions.get(tk, {}).get("currency", "GBX")
-    # Use explicit known codes for the mockup look and feel
+        return True
+    cur = str((pos_data or {}).get("currency") or "").upper()
+    return tk.endswith(".L") and cur in ("GBP", "GBX")
+
+
+def _cur_from_ticker(tk: str, portfolio_positions: Dict[str, Any]) -> str:
+    # Penni-tsoon .L: hind normaliseeritakse naeltes → EUR-kurss peab olema GBP, mitte JSON-is olev ekslik EUR.
+    if tk in EUR_DOT_L_TICKERS:
+        return "EUR"
+    if _is_london_pence_ticker(tk, portfolio_positions.get(tk, {})):
+        return "GBP"
     if tk.endswith(".OL"):
         return "NOK"
     if tk.endswith(".CO"):
         return "DKK"
-    # Fallback to what portfolio_data says
     return portfolio_positions.get(tk, {}).get("currency", "USD")
 
 
@@ -236,7 +258,7 @@ def _heuristic_score(ret_pct: float, rsi: float, div_yield_pct: float) -> float:
 
 def _sector_for_signals(tk: str) -> str:
     """Sector name for signal logic (rate sensitivity)."""
-    return TICKER_TO_SECTOR.get(tk, DEFAULT_SECTOR)
+    return SECTOR_MAP.get(tk, DEFAULT_SECTOR)
 
 
 def _make_signals(
@@ -279,7 +301,7 @@ def _make_signals(
 
     # S3: Div+/Mom+/Val?/Rate?
     sector = _sector_for_signals(tk)
-    rate_sensitive = sector in ("UK Infrastr", "USA REITid", "Võlakirjad")
+    rate_sensitive = sector in ("UK Infra", "REIT", "Võlakirjad")
     if div_yield_pct >= 5:
         s3, t3 = "Div+", "p"
     elif rsi >= 60 and ret_pct >= 10:
@@ -297,9 +319,46 @@ def _make_signals(
     return [s1, s2, s3], [t1, t2, t3]
 
 
+def _fmp_div_yield_pct(tk: str) -> Optional[float]:
+    """Financial Modeling Prep — dividend yield % kui API võti olemas."""
+    key = os.environ.get("FMP_API_KEY", "").strip()
+    if not key:
+        return None
+    sym = tk.upper().strip()
+    urls = [
+        f"https://financialmodelingprep.com/api/v3/profile/{urllib.parse.quote(sym)}?apikey={key}",
+        f"https://financialmodelingprep.com/api/v3/quote/{urllib.parse.quote(sym)}?apikey={key}",
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "portfolio-dashboard/1.0"})
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError):
+            continue
+        row: Dict[str, Any] = {}
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            row = data[0]
+        elif isinstance(data, dict):
+            row = data
+        if not row:
+            continue
+        raw = _safe_float(row.get("dividendYield"), 0.0)
+        if raw <= 0:
+            raw = _safe_float(row.get("lastDiv") or row.get("lastAnnualDividend"), 0.0)
+            px = _safe_float(row.get("price"), 0.0)
+            if raw > 0 and px > 0:
+                return (raw / px) * 100.0
+        if raw > 0:
+            return raw * 100.0 if raw <= 1.0 else raw
+    return None
+
+
 def _compute_div_yield(tk: str, price: float, info: Dict[str, Any]) -> float:
     """Compute dividend yield from info or Ticker.dividends. Returns percent (e.g. 5.4)."""
     if not price or price <= 0:
+        return 0.0
+    if tk in DIV_YIELD_FORCE_ZERO_TICKERS:
         return 0.0
     result = 0.0
     raw = _safe_float(info.get("dividendYield"), 0.0)
@@ -324,9 +383,19 @@ def _compute_div_yield(tk: str, price: float, info: Dict[str, Any]) -> float:
                 pass
     if result > 30:
         result = result / 100.0
-    if result > 25:
-        result = 0.0
-    return result
+    # FMP fallback: TLT / NOVO jms kui yfinance annab 0 või ilmselt vale
+    fmp_bad = result <= 0.05 or (
+        tk == "TLT" and (result < 2.0 or result > 8.0)
+    ) or (
+        tk == "NOVO-B.CO" and (result < 0.4 or result > 4.0)
+    )
+    if fmp_bad:
+        fmp_y = _fmp_div_yield_pct(tk)
+        if fmp_y is not None and 0 < fmp_y <= 25:
+            result = fmp_y
+    if result > 20:
+        return 0.0
+    return float(result)
 
 
 def _format_pe(x: Any) -> str:
@@ -384,16 +453,29 @@ def _fetch_position_data_aggregator(tk: str, portfolio_positions: Dict[str, Any]
 
     ibkr_price = None
     pos_data = portfolio_positions.get(tk, {})
-    if pos_data.get("source") == "ibkr" and pos_data.get("market_price"):
-        ibkr_price = float(pos_data["market_price"])
+    ibkr_price_raw = pos_data.get("ibkr_mark_price") or pos_data.get("market_price")
+    if pos_data.get("source") == "ibkr" and ibkr_price_raw:
+        ibkr_price = float(ibkr_price_raw)
 
     hist, hist_src = agg.get_history_with_source(tk, "1y")
     fund = agg.get_fundamentals(tk)
     price_res = agg.get_price(tk, ibkr_price=ibkr_price, ibkr_sync_age_hours=last_ibkr_sync_hours)
+    if ibkr_price is not None and pos_data.get("source") == "ibkr":
+        price_res = {
+            **price_res,
+            "price": float(ibkr_price),
+            "source": "ibkr",
+            "all_sources": {"ibkr": float(ibkr_price), **(price_res.get("all_sources") or {})},
+            "data_quality": {
+                **(price_res.get("data_quality") or {}),
+                "price_source": "ibkr",
+            },
+        }
     # Price from aggregator is always normalized (pounds for .L). Hist may or may not be.
     has_valid_price = price_res.get("price", 0) and float(price_res.get("price", 0)) > 0
-    hist_normalized = (tk.endswith(".L") or tk in GBX_PENNY_TICKERS) and hist_src in ("yfinance", "yahoo_http")
-    price_already_normalized = hist_normalized or (has_valid_price and (tk.endswith(".L") or tk in GBX_PENNY_TICKERS))
+    is_gbx = _is_london_pence_ticker(tk, pos_data)
+    hist_normalized = is_gbx and hist_src in ("yfinance", "yahoo_http")
+    price_already_normalized = hist_normalized or (has_valid_price and is_gbx)
     earn_data, earn_src = agg.get_earnings_with_source(tk)
 
     name = tk
@@ -670,25 +752,21 @@ def _compute_position(
         base = _safe_scalar(close, -(lookback + 1)) if lookback > 0 else _safe_scalar(close, 0)
         ret_4w = ((price_raw - base) / base) * 100.0 if base and base > 0 else 0.0
 
+    pos_data = portfolio_positions.get(tk, {})
     cur = _cur_from_ticker(tk, portfolio_positions)
     mkt = _mkt_from_ticker(tk)
 
-    shares = float(portfolio_positions.get(tk, {}).get("shares", 0.0))
-    avg_price_raw = float(portfolio_positions.get(tk, {}).get("avg_price", 0.0))
+    shares = float(pos_data.get("shares", 0.0))
+    avg_price_raw = float(pos_data.get("avg_price", 0.0))
 
-    # ret_pct = return vs avg_price (cost basis)
+    # Same units as avg ostuhind: normalize .L hist from pence → pounds when needed
     price_already_normalized = (data_sources or {}).get("price_already_normalized", False)
-    if len(close) < 2 or price_already_normalized:
-        avg_for_ret = avg_price_raw
-    elif cur == "GBP" and tk in GBX_PENNY_TICKERS:
-        avg_for_ret = avg_price_raw * 100.0
-    else:
-        avg_for_ret = avg_price_raw
-    ret_pct = ((price_raw - avg_for_ret) / avg_for_ret) * 100.0 if avg_for_ret and avg_for_ret > 0 else 0.0
-
-    if cur == "GBP" and (tk.endswith(".L") or tk in GBX_PENNY_TICKERS) and len(close) >= 2 and not price_already_normalized:
+    if cur == "GBP" and _is_london_pence_ticker(tk, pos_data) and len(close) >= 2 and not price_already_normalized:
         price_raw = price_raw / 100.0
     cur_price_for_eur = cur
+
+    # Tootlus vs avg ostuhind (not 29-day return)
+    ret_pct = ((price_raw - avg_price_raw) / avg_price_raw * 100.0) if avg_price_raw > 0 else 0.0
 
     trailing_pe = info.get("trailingPE")
     forward_pe = info.get("forwardPE")
@@ -709,8 +787,6 @@ def _compute_position(
 
     eur_price = _to_eur_price(tk, price_raw, cur_price_for_eur, fx_rates)
     avg_eur = _to_eur_price(tk, avg_price_raw, cur, fx_rates)
-    if avg_eur and avg_eur > 0:
-        ret_pct = ((eur_price - avg_eur) / avg_eur) * 100.0
 
     ret_pct = 0.0 if not np.isfinite(ret_pct) else ret_pct
     ret_4w = 0.0 if not np.isfinite(ret_4w) else ret_4w
@@ -748,9 +824,13 @@ def _compute_position(
         "eur_price": eur_price,
         "shares": shares,
         "avg_price": avg_price_raw,
-        "tees": portfolio_positions.get(tk, {}).get("tees", ""),
-        "target": float(portfolio_positions.get(tk, {}).get("target", 0) or 0),
-        "stop_loss": float(portfolio_positions.get(tk, {}).get("stop_loss", 0) or 0),
+        "tees": pos_data.get("tees", ""),
+        "target": float(pos_data.get("target", 0) or 0),
+        "stop_loss": float(pos_data.get("stop_loss", 0) or 0),
+        "instrument_type": pos_data.get("instrument_type") or "equity",
+        "ibkr_mark_price": pos_data.get("ibkr_mark_price"),
+        "ibkr_market_value_eur": pos_data.get("ibkr_market_value_eur"),
+        "ibkr_unrealized_pnl": pos_data.get("ibkr_unrealized_pnl"),
         "data_source": data_sources or {},
         "data_quality": (data_sources or {}).get("data_quality", {}) if data_sources else {},
     }
@@ -965,14 +1045,68 @@ def _fake_earnings_calendar(frontend_tickers: List[str]) -> List[Dict[str, Any]]
     return out
 
 
-def build_portfolio_json() -> Dict[str, Any]:
+def _load_portfolio_positions_and_meta() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    portfolio_meta always from portfolio_data.json.
+    Positions: if SQLite has any rows (after migrate), use DB as source of truth; else JSON.
+    """
     data_path = os.path.join(ROOT_DIR, "portfolio_data.json")
-
     with open(data_path, "r", encoding="utf-8") as f:
         portfolio_data = json.load(f)
 
-    portfolio_positions: Dict[str, Any] = portfolio_data["positions"]
     portfolio_meta: Dict[str, Any] = portfolio_data.get("portfolio_meta") or {}
+    json_positions: Dict[str, Any] = portfolio_data.get("positions") or {}
+
+    try:
+        import sys
+
+        scripts_dir = os.path.join(ROOT_DIR, "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from database import get_positions, init_db
+
+        init_db()
+        rows = get_positions()
+        if not rows:
+            return json_positions, portfolio_meta
+
+        out: Dict[str, Any] = {}
+        for r in rows:
+            t = r["ticker"]
+            pos: Dict[str, Any] = {
+                "avg_price": float(r["avg_price"] or 0),
+                "shares": float(r["shares"] or 0),
+                "currency": r["currency"] or "USD",
+                "tees": r["tees"] or "",
+                "target": float(r["target"] or 0),
+                "stop_loss": float(r["stop_loss"] or 0),
+                "source": r.get("source") or "manual",
+            }
+            mp = r.get("market_price")
+            if mp is not None and mp != "":
+                try:
+                    pos["market_price"] = float(mp)
+                except (TypeError, ValueError):
+                    pass
+            json_pos = json_positions.get(t) or {}
+            for extra in (
+                "ibkr_mark_price",
+                "ibkr_unrealized_pnl",
+                "ibkr_market_value_eur",
+                "instrument_type",
+                "market_price",
+                "currency",
+            ):
+                if extra in json_pos:
+                    pos[extra] = json_pos.get(extra)
+            out[t] = pos
+        return out, portfolio_meta
+    except Exception:
+        return json_positions, portfolio_meta
+
+
+def build_portfolio_json() -> Dict[str, Any]:
+    portfolio_positions, portfolio_meta = _load_portfolio_positions_and_meta()
     tickers_all: List[str] = list(portfolio_positions.keys())
     fx_rates = _pull_fx_rates()
 
@@ -1013,7 +1147,7 @@ def build_portfolio_json() -> Dict[str, Any]:
                 df = fallback_hist.get(tk, pd.DataFrame())
                 if not df.empty and len(df) >= 2:
                     norm = False
-                    if tk.endswith(".L") or tk in GBX_PENNY_TICKERS:
+                    if _is_london_pence_ticker(tk, portfolio_positions.get(tk, {})):
                         df = df.copy()
                         for c in ["Open", "High", "Low", "Close"]:
                             if c in df.columns:
@@ -1056,25 +1190,52 @@ def build_portfolio_json() -> Dict[str, Any]:
 
     positions: List[Dict[str, Any]] = []
     for tk in tickers_all:
+        pref_price = portfolio_positions.get(tk, {}).get("ibkr_mark_price") or portfolio_positions.get(tk, {}).get("market_price")
         pos = _compute_position(
             tk=tk,
             portfolio_positions=portfolio_positions,
             hist=price_hist_pos.get(tk, pd.DataFrame()),
             info=tickers_info.get(tk, {}),
             fx_rates=fx_rates,
-            price_override=price_overrides.get(tk),
+            price_override=pref_price if pref_price else price_overrides.get(tk),
             data_sources=data_sources_by_ticker.get(tk),
         )
         pos["cat"] = _cat_map(tk)
+        sig_t = pos.get("sigT") or []
+        n_red = sum(1 for t in sig_t if t == "n")
+        pos["flagged"] = (
+            n_red >= 2
+            or float(pos.get("score") or 50) < 38
+            or (
+                float(pos.get("stop_loss") or 0) > 0
+                and float(pos.get("price") or 0) <= float(pos.get("stop_loss") or 0)
+            )
+        )
         positions.append(pos)
 
     # Portfolio totals for value and % allocation
-    total_eur = sum(p["eur_price"] * p["shares"] for p in positions)
+    total_eur = 0.0
+    for p in positions:
+        ibkr_val = p.get("ibkr_market_value_eur")
+        if ibkr_val is not None:
+            try:
+                total_eur += float(ibkr_val)
+                continue
+            except (TypeError, ValueError):
+                pass
+        total_eur += p["eur_price"] * p["shares"]
     if total_eur <= 0:
         total_eur = 1.0
 
     for p in positions:
-        value_eur = p["eur_price"] * p["shares"]
+        ibkr_val = p.get("ibkr_market_value_eur")
+        if ibkr_val is not None:
+            try:
+                value_eur = float(ibkr_val)
+            except (TypeError, ValueError):
+                value_eur = p["eur_price"] * p["shares"]
+        else:
+            value_eur = p["eur_price"] * p["shares"]
         p["eur"] = round(float(value_eur), 0)
         p["pct"] = round(float(value_eur / total_eur * 100.0), 1)
 
@@ -1119,59 +1280,69 @@ def build_portfolio_json() -> Dict[str, Any]:
             }
         )
 
-    # Sidebar "Sektori jaotus": portfolio position EUR values grouped by sector
+    # Sidebar "Sektori jaotus": portfolio EUR by sector (not S&P sector ETF performance).
     sector_eur: Dict[str, float] = {}
     for p in positions:
-        sec = TICKER_TO_SECTOR.get(p["tk"], DEFAULT_SECTOR)
-        val = p["eur_price"] * p["shares"]
-        sector_eur[sec] = sector_eur.get(sec, 0.0) + val
-    total_sector = sum(sector_eur.values()) or 1.0
-    sector_colors = {
-        "Energia": "var(--amber)",
-        "USA REITid": "var(--purple)",
-        "UK Infrastr": "var(--teal)",
-        "UK Finants": "var(--blue)",
-        "Tehnoloogia": "var(--green)",
-        "Fintech": "var(--cyan)",
-        "Tervishoid": "var(--green)",
-        "Võlakirjad": "var(--t3)",
-        "BDC": "var(--purple)",
-        "Telecom": "var(--blue)",
-        "Materjalid": "var(--amber)",
-        "Tarbekaubad": "var(--teal)",
-        "Arenevad turud": "var(--green)",
-        "Tööstus": "var(--t3)",
-        "Muu": "var(--t3)",
-    }
-    sector_allocation = []
-    for sec, eur_val in sorted(sector_eur.items(), key=lambda x: -x[1]):
-        pct = (eur_val / total_sector) * 100.0
-        sector_allocation.append(
-            {
-                "name": sec,
-                "pct": round(float(pct), 1),
-                "color": sector_colors.get(sec, "var(--t3)"),
-            }
-        )
+        sector = SECTOR_MAP.get(p["tk"], DEFAULT_SECTOR)
+        sector_eur[sector] = sector_eur.get(sector, 0.0) + float(p["eur"])
+
+    sector_allocation = sorted(
+        [
+            {"name": name, "pct": round(val / total_eur * 100, 1), "color": "var(--teal)"}
+            for name, val in sector_eur.items()
+        ],
+        key=lambda x: x["pct"],
+        reverse=True,
+    )
 
     news = _real_news_from_tickers(tickers_all, positions)
     earnings = _real_earnings_calendar(tickers_all)
 
-    # KPIs — use portfolio_meta overrides when provided (cash + margin vs computed)
+    # KPIs — margin / kostbasis; unrealized = sum((eur_price - avg_eur) * shares)
     cash_invested = _safe_float(portfolio_meta.get("cash_invested_eur"))
-    margin_used = _safe_float(portfolio_meta.get("margin_used_eur"))
-    cost_basis_eur = sum(p["avg_eur"] * p["shares"] for p in positions)
+    margin_used = _safe_float(portfolio_meta.get("margin_used_eur")) or _safe_float(portfolio_meta.get("maintenance_margin_eur"))
+    margin_loan = _safe_float(portfolio_meta.get("margin_loan")) or _safe_float(portfolio_meta.get("margin_loan_eur"))
+    account_market_value_eur = _safe_float(portfolio_meta.get("market_value_eur")) or _safe_float(portfolio_meta.get("mkt_val_eur"))
+    account_net_liquidation_eur = _safe_float(portfolio_meta.get("net_liquidation"))
+    account_unrealized_pnl_eur = _safe_float(portfolio_meta.get("unrealized_pnl_eur"))
+    account_realized_pnl_eur = _safe_float(portfolio_meta.get("realized_pnl_eur"))
+    account_day_pnl_eur = _safe_float(portfolio_meta.get("day_pnl_eur"))
+    account_day_pnl_pct = _safe_float(portfolio_meta.get("day_pnl_pct"))
+    if margin_loan <= 0 and margin_used > 0:
+        margin_loan = margin_used
+    if margin_loan <= 0 and account_market_value_eur > 0 and account_net_liquidation_eur > 0:
+        margin_loan = max(0.0, account_market_value_eur - account_net_liquidation_eur)
+    if margin_loan <= 0 and _DB_KPI_EXTRAS:
+        try:
+            from database import get_portfolio_margin_loan_eur
+
+            margin_loan = max(margin_loan, get_portfolio_margin_loan_eur())
+        except Exception:
+            pass
+
+    cost_basis_positions_eur = sum(float(p["avg_eur"]) * float(p["shares"]) for p in positions)
+    unrealized_pnl = sum(
+        (float(p["eur_price"]) - float(p["avg_eur"])) * float(p["shares"]) for p in positions
+    )
+    if positions and all(p.get("ibkr_unrealized_pnl") is not None for p in positions):
+        unrealized_pnl = sum(_safe_float(p.get("ibkr_unrealized_pnl")) for p in positions)
+    cost_basis_eur = cost_basis_positions_eur
     if cash_invested > 0:
         cost_basis_eur = cash_invested
-    unrealized_pnl = total_eur - cost_basis_eur
     if os.environ.get("PORTFOLIO_DEBUG"):
         for p in positions:
             eur_val = p["eur_price"] * p["shares"]
             print(f"[debug] {p['tk']}: shares={p['shares']} price={p['eur_price']:.2f} eur_val={eur_val:.0f}")
         print(f"[debug] total_eur={total_eur:.0f} cost_basis={cost_basis_eur:.0f} unrealized_pnl={unrealized_pnl:.0f}")
-    unrealized_pnl_pct = (unrealized_pnl / cost_basis_eur * 100.0) if cost_basis_eur else 0.0
-    day_chg_eur = sum(p["eur_price"] * p["shares"] * (p["chg"] / 100.0) for p in positions)
-    day_chg_pct = (day_chg_eur / total_eur * 100.0) if total_eur else 0.0
+    display_total_eur = account_market_value_eur if account_market_value_eur > 0 else total_eur
+    display_unrealized_pnl = account_unrealized_pnl_eur if portfolio_meta.get("unrealized_pnl_eur") is not None else unrealized_pnl
+    if display_total_eur > 0 and portfolio_meta.get("unrealized_pnl_eur") is not None:
+        cost_basis_eur = display_total_eur - display_unrealized_pnl
+    unrealized_pnl_pct = (display_unrealized_pnl / cost_basis_eur * 100.0) if cost_basis_eur else 0.0
+    day_chg_eur = account_day_pnl_eur if portfolio_meta.get("day_pnl_eur") is not None else sum(
+        p["eur_price"] * p["shares"] * (p["chg"] / 100.0) for p in positions
+    )
+    day_chg_pct = account_day_pnl_pct if portfolio_meta.get("day_pnl_pct") is not None else ((day_chg_eur / display_total_eur * 100.0) if display_total_eur else 0.0)
 
     div_yearly_eur = sum(p["eur_price"] * p["shares"] * (p["div"] / 100.0) for p in positions)
     div_yield = (div_yearly_eur / total_eur * 100.0) if total_eur else 0.0
@@ -1214,29 +1385,94 @@ def build_portfolio_json() -> Dict[str, Any]:
                 if ann_std > 0:
                     sharpe_val = (ann_return - risk_free_pct) / ann_std
 
-    max_pct = max((p["pct"] for p in positions), default=0.0)
-    concentration = max_pct
+    max_sector_pct = max((v / total_eur * 100.0) for v in sector_eur.values()) if sector_eur and total_eur else 0.0
+    concentration = max_sector_pct
 
-    attention_count = 0
+    attention_sell = sum(1 for p in positions if p.get("flagged"))
+    attention_rsi = sum(1 for p in positions if int(p.get("rsi") or 50) > 75 or int(p.get("rsi") or 50) < 25)
+    attention_target = sum(
+        1 for p in positions if float(p.get("target") or 0) > 0 and float(p.get("price") or 0) >= float(p["target"])
+    )
+    attention_stop = sum(
+        1
+        for p in positions
+        if float(p.get("stop_loss") or 0) > 0 and float(p.get("price") or 0) <= float(p["stop_loss"])
+    )
+    attention_tickers: Set[str] = set()
     for p in positions:
+        tk = str(p["tk"])
         if p.get("flagged"):
-            attention_count += 1
-        if p["rsi"] > 75 or p["rsi"] < 25:
-            attention_count += 1
-        if p["stop_loss"] > 0 and p["price"] <= p["stop_loss"]:
-            attention_count += 1
-        if p["target"] > 0 and p["price"] >= p["target"]:
-            attention_count += 1
+            attention_tickers.add(tk)
+        r = int(p.get("rsi") or 50)
+        if r > 75 or r < 25:
+            attention_tickers.add(tk)
+        if float(p.get("target") or 0) > 0 and float(p.get("price") or 0) >= float(p["target"]):
+            attention_tickers.add(tk)
+        if float(p.get("stop_loss") or 0) > 0 and float(p.get("price") or 0) <= float(p["stop_loss"]):
+            attention_tickers.add(tk)
+    attention_count = len(attention_tickers)
+
+    summary_bits: List[str] = []
+    for p in positions:
+        tk = str(p["tk"])
+        if p.get("flagged"):
+            summary_bits.append(f"{tk} müü")
+    for p in positions:
+        tk = str(p["tk"])
+        r = int(p.get("rsi") or 50)
+        if (r > 75 or r < 25) and not p.get("flagged"):
+            summary_bits.append(f"{tk} RSI")
+    for p in positions:
+        tk = str(p["tk"])
+        if float(p.get("target") or 0) > 0 and float(p.get("price") or 0) >= float(p["target"]):
+            summary_bits.append(f"{tk} target")
+    for p in positions:
+        tk = str(p["tk"])
+        if float(p.get("stop_loss") or 0) > 0 and float(p.get("price") or 0) <= float(p["stop_loss"]):
+            if f"{tk} müü" not in summary_bits:
+                summary_bits.append(f"{tk} stop")
+    already = {x.split()[0] for x in summary_bits}
+    for p in positions:
+        tk = str(p["tk"])
+        sigs = p.get("sigs") or []
+        if "Val?" in sigs and int(p.get("score") or 50) < 52 and tk not in already:
+            summary_bits.append(f"{tk} ülevaata")
+            already.add(tk)
+    attention_summary = " · ".join(summary_bits[:10])
+
+    realized_pnl_eur = account_realized_pnl_eur if portfolio_meta.get("realized_pnl_eur") is not None else 0.0
+    if portfolio_meta.get("realized_pnl_eur") is None and _DB_KPI_EXTRAS and compute_realized_pnl_eur_from_trades:
+        try:
+            realized_pnl_eur = float(compute_realized_pnl_eur_from_trades(fx_rates))
+        except Exception:
+            realized_pnl_eur = 0.0
+
+    portfolio_drawdown_pct: Optional[float] = None
+    if _DB_KPI_EXTRAS and compute_drawdown_pct_from_snapshots:
+        try:
+            portfolio_drawdown_pct = compute_drawdown_pct_from_snapshots(float(display_total_eur))
+        except Exception:
+            portfolio_drawdown_pct = None
+
+    net_equity = account_net_liquidation_eur if account_net_liquidation_eur > 0 else (float(display_total_eur) - float(margin_loan))
+    leverage_ratio: Optional[float] = None
+    if net_equity > 1e-6:
+        leverage_ratio = float(display_total_eur) / net_equity
 
     kpis = {
-        "portfolioTotal": round(total_eur, 0),
+        "portfolioTotal": round(display_total_eur, 0),
         "dayChgEur": round(day_chg_eur, 0),
         "dayChgPct": round(day_chg_pct, 1),
-        "unrealizedPnl": round(unrealized_pnl, 0),
+        "unrealizedPnl": round(display_unrealized_pnl, 0),
         "unrealizedPnlPct": round(unrealized_pnl_pct, 1),
+        "realizedPnl": round(realized_pnl_eur, 0),
         "costBasisEur": round(cost_basis_eur, 0),
+        "costBasisPositionsEur": round(cost_basis_positions_eur, 0),
         "cashInvestedEur": round(cash_invested, 0) if cash_invested > 0 else None,
         "marginUsedEur": round(margin_used, 0) if margin_used > 0 else None,
+        "marginLoan": round(margin_loan, 0) if margin_loan > 0 else None,
+        "netEquity": round(net_equity, 0) if margin_loan > 0 or account_net_liquidation_eur > 0 else round(display_total_eur, 0),
+        "leverageRatio": round(leverage_ratio, 3) if leverage_ratio is not None else None,
         "divYield": round(div_yield, 1),
         "divYearlyEur": round(div_yearly_eur, 0),
         "divMonthlyEur": round(div_monthly_eur, 0),
@@ -1244,6 +1480,12 @@ def build_portfolio_json() -> Dict[str, Any]:
         "sharpe": round(sharpe_val, 2),
         "concentration": round(concentration, 1),
         "attention": attention_count,
+        "attentionSell": attention_sell,
+        "attentionRsi": attention_rsi,
+        "attentionTarget": attention_target,
+        "attentionStop": attention_stop,
+        "attentionSummary": attention_summary,
+        "portfolioDrawdownPct": portfolio_drawdown_pct,
     }
 
     # Macro
@@ -1313,6 +1555,7 @@ def build_portfolio_json() -> Dict[str, Any]:
                 "eur": p["eur"],
                 "pct": p["pct"],
                 "ret": p["ret"],
+                "ret_4w": p.get("ret_4w", 0.0),
                 "score": p["score"],
                 "sigs": p["sigs"],
                 "sigT": p["sigT"],
@@ -1331,6 +1574,10 @@ def build_portfolio_json() -> Dict[str, Any]:
                 "avg_price": p.get("avg_price", 0),
                 "avg_eur": p.get("avg_eur", 0),
                 "eur_price": p.get("eur_price", 0),
+                "instrument_type": p.get("instrument_type", "equity"),
+                "ibkr_mark_price": p.get("ibkr_mark_price"),
+                "ibkr_market_value_eur": p.get("ibkr_market_value_eur"),
+                "ibkr_unrealized_pnl": p.get("ibkr_unrealized_pnl"),
                 "data_source": p.get("data_source", {}),
                 "data_quality": p.get("data_quality", {}),
             }

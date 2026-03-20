@@ -28,3 +28,9 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Dashboard table: üks allikas (mitte ainult page.tsx inline <style>), vähendab hydration mismatch’e Turbopack/HMR ajal */
+.cell-div {
+  width: 72px;
+  text-align: center;
+}
